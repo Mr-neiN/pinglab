@@ -90,7 +90,7 @@ Rules the presets hold to:
 - **DNS is never changed by a preset.** Which resolver is fastest is a measurement, not a preset; it stays a separate button with its own benchmark rule.
 - **Every step is separately undoable.** Each setting records its restore point before it is applied, so a preset is three or four individual changes, not one opaque one.
 - **Nothing is hidden.** The result lists every step and what happened: applied, already in place, not available on this adapter, or failed.
-- The old "apply every fix" action is now an alias for the **safe** preset; there is no bundled button that applies the whole list.
+- There is no bundled action that applies the whole list: presets replaced the old "apply every fix" button, and nothing can reach the experimental row without asking for it by name.
 
 ## What it deliberately only advises
 

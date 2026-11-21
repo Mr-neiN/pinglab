@@ -5,7 +5,6 @@ const state = {
   tweak: null,
   pending: null,
   endpoints: [],
-  resolvers: [],
   catalog: null,
   probe: null,
   bloat: null,
@@ -624,7 +623,6 @@ async function loadState() {
   state.tweak = s.tweakState;
   state.pending = s.pending;
   state.endpoints = s.endpoints || [];
-  state.resolvers = s.resolvers || [];
   state.catalog = s.catalog || null;
   state.alias = s.connection.activeRoute?.alias || null;
   renderLink();
@@ -714,8 +712,6 @@ async function tweak(action, extra = {}) {
       "plan-power-on": "Requesting admin…",
       "nic-power-off": "Checking this adapter…",
       "nic-power-on": "Checking this adapter…",
-      "powersave-off": "Requesting admin…",
-      "powersave-on": "Requesting admin…",
       "nagle-off": "Requesting admin…",
       "nagle-on": "Requesting admin…",
       "adapter-tuning-off": "Requesting admin…",

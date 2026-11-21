@@ -24,7 +24,7 @@ import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions } from "./lib/tweaks.mjs";
-import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, tweakByCli, presetsFor, validateCatalog } from "./lib/catalog.mjs";
+import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
 import { saveRun, previousRun, listRuns } from "./lib/db.mjs";
@@ -809,7 +809,8 @@ async function main() {
     const tw = ui.core?.tw;
     const rows = auditRows(tw);
     const pending = ui.core?.pending || { items: [], count: 0 };
-    const w1 = 35, w2 = 33, w3 = 24;
+    const w1 = Math.max(35, ...rows.map((r) => String(r.setting).length + 2));
+    const w2 = 33, w3 = 24;
     const pad = (s, n) => {
       const t = String(s ?? "");
       return (t.length > n ? `${t.slice(0, n - 2)}..` : t).padEnd(n);
@@ -927,6 +928,8 @@ async function main() {
   if (has("--restore")) {
     await runTweak("restore-all");
     print([ui.message?.text || "done", `pending=${ui.core?.pending?.count}`]);
+    // A restore that did not put a setting back must not look like success to a script.
+    if (ui.message?.kind === "bad") process.exitCode = 1;
     return;
   }
   if (has("--wifi")) {
