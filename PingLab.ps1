@@ -206,6 +206,11 @@ for ($i = 0; $i -lt 5; $i++) {
 }
 [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 
+$fixTip = New-Object System.Windows.Forms.ToolTip
+$fixTip.AutoPopDelay = 30000
+$fixTip.InitialDelay = 400
+$fixTip.ReshowDelay = 100
+
 function New-FixRow([int]$row, [string]$title, [string]$hint) {
     $lblTitle = New-Object System.Windows.Forms.Label
     $lblTitle.Text = $title
@@ -242,7 +247,7 @@ function New-FixRow([int]$row, [string]$title, [string]$hint) {
     $tlpFixes.Controls.Add($lblState, 1, $row)
     $tlpFixes.Controls.Add($btn, 2, $row)
 
-    return @{ Label = $lblState; Button = $btn }
+    return @{ Label = $lblState; Button = $btn; Hint = $lblHint; Title = $lblTitle }
 }
 
 $rowPlan = New-FixRow 0 'Wireless power saving' 'Power Options -> Wireless Adapter Settings -> Power Saving Mode'
@@ -253,13 +258,17 @@ $rowOrder = New-FixRow 4 'Wi-Fi auto-connect order' 'netsh wlan show profiles or
 
 $panelRestore = New-Object System.Windows.Forms.Panel
 $panelRestore.Dock = 'Fill'
-$btnApplyAll = New-Button 'Apply every fix - one admin prompt' 280
-$btnApplyAll.Location = New-Object System.Drawing.Point(0, 12)
-$btnApplyAll.BackColor = [System.Drawing.Color]::FromArgb(232, 244, 232)
-$panelRestore.Controls.Add($btnApplyAll)
+$btnPresetSafe = New-Button 'Apply safe preset' 190
+$btnPresetSafe.Location = New-Object System.Drawing.Point(0, 12)
+$btnPresetSafe.BackColor = [System.Drawing.Color]::FromArgb(232, 244, 232)
+$panelRestore.Controls.Add($btnPresetSafe)
+
+$btnPresetLatency = New-Button 'Apply lowest-latency preset' 210
+$btnPresetLatency.Location = New-Object System.Drawing.Point(198, 12)
+$panelRestore.Controls.Add($btnPresetLatency)
 
 $btnRestore = New-Button 'Restore everything PingLab changed' 300
-$btnRestore.Location = New-Object System.Drawing.Point(292, 12)
+$btnRestore.Location = New-Object System.Drawing.Point(416, 12)
 $btnRestore.BackColor = [System.Drawing.Color]::FromArgb(252, 236, 236)
 $panelRestore.Controls.Add($btnRestore)
 $tlpFixes.Controls.Add($panelRestore, 0, 5)
@@ -386,6 +395,9 @@ $tabSoak.Controls.Add($tlpSoak)
 # --------------------------------------------------------------- update logic
 
 $script:lastTweak = $null
+# The tweak catalog (lib/catalog.mjs) arrives with every state refresh; the Fixes tab uses
+# it for the risk tag, the stock value and the tooltip, so its words match the TUI and web.
+$script:catalog = $null
 $script:soakRunning = $false
 $script:lastProgressLog = -1
 
@@ -526,6 +538,31 @@ function Update-Fixes($t) {
         $rowOrder.Button.Text = 'Move first'
         $rowOrder.Button.Enabled = $true
     }
+
+    # The catalog decides the risk tag, preset membership and the tooltip text; the code
+    # above only decides the live state sentence and which button follows from it.
+    if ($null -ne $script:catalog) {
+        $riskMap = @{}
+        foreach ($k in $script:catalog.risk.PSObject.Properties) { $riskMap[$k.Name] = $k.Value.label }
+        $presetMap = @{}
+        foreach ($p in $script:catalog.presets) {
+            foreach ($id in $p.tweaks) {
+                if ($null -eq $presetMap[$id]) { $presetMap[$id] = @() }
+                $presetMap[$id] = @($presetMap[$id]) + $p.id
+            }
+        }
+        $rows = @{ 'plan-power' = $rowPlan; 'nic-power' = $rowNic; 'nagle' = $rowNagle; 'radio-tuning' = $rowWifi; 'wifi-order' = $rowOrder }
+        foreach ($t in $script:catalog.tweaks) {
+            $row = $rows[$t.id]
+            if ($null -eq $row) { continue }
+            $in = $presetMap[$t.id]
+            # Short on purpose: the row is 300 px wide, and the long explanations live in the
+            # tooltip instead of running into the state column.
+            $row.Hint.Text = '[{0}] {1}' -f $riskMap[$t.risk], $(if ($in) { 'in ' + ($in -join ', ') } else { 'no preset' })
+            $fixTip.SetToolTip($row.Hint, ("What it changes:`n{0}`n`nTrade-off:`n{1}`n`nUndo:`n{2}" -f $t.what, $t.tradeoff, $t.undo))
+            $fixTip.SetToolTip($row.Title, ("{0} - {1}" -f $t.label, $t.stock))
+        }
+    }
 }
 
 function Update-Wifi($d) {
@@ -643,15 +680,17 @@ function Refresh-State {
         param($r)
         if (-not $r.ok) { Log ('state error: ' + $r.error); Set-Status ('Error: ' + $r.error) 'bad'; return }
         Log 'state received'
+        $script:catalog = $r.data.catalog
         Update-Overview $r.data
         Update-Fixes $r.data.tweak
         if (-not $script:soakRunning) { Update-SoakProgress $r.data.soak }
     }
 }
 
-function Send-Tweak([string]$action) {
+function Send-Tweak([string]$action, [string]$presetId) {
     Set-Status 'Waiting for the Windows admin prompt...' 'warn'
-    Send-Cmd 'apply' @{ action = $action } {
+    $tweakArgs = if ($presetId) { @{ preset = $presetId } } else { @{ action = $action } }
+    Send-Cmd 'apply' $tweakArgs {
         param($r)
         if (-not $r.ok) { Set-Status ('Error: ' + $r.error) 'bad'; return }
         if ($null -ne $r.data.tweak) { Update-Fixes $r.data.tweak }
@@ -695,7 +734,8 @@ $btnOrder.Add_Click({
     Send-Tweak $(if ($revert) { 'wifi-order-restore' } else { 'wifi-order-first' })
 })
 
-$btnApplyAll.Add_Click({ Send-Tweak 'apply-all' })
+$btnPresetSafe.Add_Click({ Send-Tweak '' 'safe' })
+$btnPresetLatency.Add_Click({ Send-Tweak '' 'latency' })
 
 $btnRestore.Add_Click({
     $answer = [System.Windows.Forms.MessageBox]::Show('Restore every setting PingLab changed back to how it was?', 'PingLab', 'YesNo', 'Question')

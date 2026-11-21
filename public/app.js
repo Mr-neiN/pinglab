@@ -6,6 +6,7 @@ const state = {
   pending: null,
   endpoints: [],
   resolvers: [],
+  catalog: null,
   probe: null,
   bloat: null,
   dns: null,
@@ -400,6 +401,168 @@ function renderDns() {
     )}</b></p>`;
 }
 
+/* Fixes are described once, in lib/catalog.mjs. This file only decides what the live
+   state says and which button follows from it, so a label or trade-off cannot differ
+   between the web UI, the terminal and the desktop app. */
+
+const meta = (id) => (state.catalog?.tweaks || []).find((t) => t.id === id) || null;
+
+function riskBadge(risk) {
+  const r = state.catalog?.risk?.[risk];
+  return `<span class="risk risk-${esc(risk)}" title="${esc(r?.meaning || "")}">${esc(r?.label || risk)}</span>`;
+}
+
+/** Live state of one setting: what it says, and which action its button runs. */
+function stateFor(id, tw) {
+  switch (id) {
+    case "dns": {
+      const dnsNow = tw.currentDns?.length ? tw.currentDns.join(", ") : "automatic (DHCP)";
+      const best = state.dns?.result?.bestLabel;
+      const servers = state.dns?.result?.resolvers?.find((r) => r.id === state.dns.result.best)?.servers;
+      return {
+        on: Boolean(tw.currentDns?.length),
+        note: tw.currentDns?.length
+          ? `<span class="ok">fixed: ${esc(dnsNow)}</span>`
+          : `<span class="ok">automatic — whatever your router hands out</span>`,
+        actions: `${best && servers && state.dns.result.winner
+          ? `<button class="btn btn-small" data-action="dns-apply" data-servers='${esc(JSON.stringify(servers))}' data-label="${esc(best)}">Use ${esc(best)}</button>`
+          : `<button class="btn btn-small btn-ghost" data-action="dns-apply" disabled title="Run the DNS benchmark until one resolver wins clearly">Benchmark first</button>`}
+          <button class="btn btn-small btn-ghost" data-action="dns-reset"${tw.currentDns?.length ? "" : " disabled"}>Automatic</button>`,
+      };
+    }
+    case "plan-power": {
+      const off = tw.planPower === "off";
+      return {
+        on: off,
+        note: off
+          ? `<span class="ok">maximum performance — verified: ${esc(tw.planDetail)}</span>`
+          : tw.planPower === "on"
+            ? `<span class="warn">on — verified: ${esc(tw.planDetail)}</span>`
+            : `<span class="dim">state could not be read</span>`,
+        actions: off
+          ? `<button class="btn btn-small btn-ghost" data-action="plan-power-on">Revert</button>`
+          : `<button class="btn btn-small" data-action="plan-power-off">Maximum performance</button>`,
+      };
+    }
+    case "nic-power": {
+      const off = tw.nicPower === "off";
+      const unavailable = tw.nicPower === "unsupported" || tw.nicPower === "unknown";
+      return {
+        on: off,
+        note: off
+          ? `<span class="ok">disabled — verified: ${esc(tw.nicDetail)}</span>`
+          : tw.nicPower === "on"
+            ? `<span class="warn">on — verified: ${esc(tw.nicDetail)}</span>`
+            : `<span class="dim">${esc(tw.nicDetail || "state could not be read")}</span>`,
+        actions: unavailable
+          ? `<button class="btn btn-small" disabled>Not available</button>`
+          : off
+            ? `<button class="btn btn-small btn-ghost" data-action="nic-power-on">Revert</button>`
+            : `<button class="btn btn-small" data-action="nic-power-off">Disable</button>`,
+      };
+    }
+    case "nagle": {
+      const off = tw.nagleDisabled === true;
+      const unavailable = tw.nagleAvailable === false;
+      return {
+        on: off,
+        note: unavailable
+          ? `<span class="dim">this adapter has no TCP/IP interface key to configure</span>`
+          : off
+            ? `<span class="ok">disabled — verified: TcpAckFrequency=${esc(tw.nagleValues?.tcpAckFrequency)}, TCPNoDelay=${esc(tw.nagleValues?.tcpNoDelay)}</span>`
+            : `<span class="warn">on — Windows batches small packets</span>`,
+        actions: unavailable
+          ? `<button class="btn btn-small" disabled>Not available</button>`
+          : off
+            ? `<button class="btn btn-small btn-ghost" data-action="nagle-on">Revert</button>`
+            : `<button class="btn btn-small" data-action="nagle-off">Disable</button>`,
+      };
+    }
+    case "radio-tuning": {
+      const at = tw.adapterTuning;
+      return {
+        on: Boolean(at && !at.needsFix),
+        note: !at
+          ? `<span class="dim">this driver exposes no MIMO power-save or roaming property</span>`
+          : `<span class="${at.needsFix ? "warn" : "ok"}">${at.needsFix ? "vendor defaults" : "applied"}</span> — ${esc(at.items.map((i) => i.display).join(" · "))}`,
+        actions: !at
+          ? `<button class="btn btn-small" disabled>Not available</button>`
+          : at.needsFix
+            ? `<button class="btn btn-small" data-action="adapter-tuning-off">Apply anyway</button>`
+            : `<button class="btn btn-small btn-ghost" data-action="adapter-tuning-on">Revert</button>`,
+      };
+    }
+    case "wifi-order": {
+      const wo = tw.wifiOrder;
+      return {
+        on: Boolean(wo?.appliedByUs && wo?.isFirst),
+        note: !wo
+          ? `<span class="dim">this adapter is not wireless</span>`
+          : !wo.readable
+            ? `<span class="warn">Windows returned no profile list, so nothing can be reordered</span>`
+            : wo.isFirst
+              ? `<span class="ok">first — ${esc(wo.target)}</span>${wo.appliedByUs ? " · applied by PingLab" : ""}`
+              : `joined network is #${esc(wo.position)} of ${esc(wo.profiles.length)} — an adapter reset can land on another saved network`,
+        actions: !wo || !wo.readable
+          ? `<button class="btn btn-small" disabled>Not available</button>`
+          : wo.isFirst && wo.appliedByUs
+            ? `<button class="btn btn-small btn-ghost" data-action="wifi-order-restore">Revert</button>`
+            : wo.isFirst
+              ? `<button class="btn btn-small" disabled>Already first</button>`
+              : `<button class="btn btn-small" data-action="wifi-order-first">Move first</button>`,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function fixCard(id, tw) {
+  const t = meta(id);
+  const st = t ? stateFor(id, tw) : null;
+  if (!t || !st) return "";
+  const inPresets = (state.catalog.presets || []).filter((p) => p.tweaks.includes(id)).map((p) => p.id);
+  return `
+    <div class="fix">
+      <div class="fix-info">
+        <div class="fix-title">${esc(t.label)} ${riskBadge(t.risk)}<span class="dim small">${inPresets.length ? `in ${esc(inPresets.join(", "))}` : "not in a preset"}</span></div>
+        <div class="fix-note">${st.note}</div>
+        <div class="sub-note"><b>Changes:</b> ${esc(t.what)}</div>
+        <div class="sub-note"><b>Trade-off:</b> ${esc(t.tradeoff)}</div>
+        <div class="sub-note dim">Windows default: ${esc(t.stock)}</div>
+      </div>
+      <div class="fix-actions">${st.actions}</div>
+    </div>`;
+}
+
+function renderPresets() {
+  const bar = $("presetBar");
+  if (!bar) return;
+  if (!state.catalog || !state.tweak) {
+    bar.innerHTML = "";
+    return;
+  }
+  const tw = state.tweak;
+  bar.innerHTML = (state.catalog.presets || [])
+    .map((p) => {
+      const rows = p.tweaks
+        .map((id) => {
+          const t = meta(id);
+          const st = t ? stateFor(id, tw) : null;
+          return `<li><span class="${st?.on ? "ok" : "dim"}">${st?.on ? "✓" : "–"}</span> ${esc(t?.label || id)}</li>`;
+        })
+        .join("");
+      return `<div class="preset">
+        <div class="fix-title">${esc(p.label)}</div>
+        <div class="sub-note">${esc(p.summary)}</div>
+        <ul class="preset-list">${rows}</ul>
+        <div class="sub-note dim">${esc(p.leaves)}</div>
+        <button class="btn btn-small" data-action="apply-preset" data-preset="${esc(p.id)}">Apply ${esc(p.label)}</button>
+      </div>`;
+    })
+    .join("");
+}
+
 function renderFixes() {
   const box = $("fixesBox");
   const tw = state.tweak;
@@ -407,158 +570,14 @@ function renderFixes() {
     box.innerHTML = `<p class="empty">No adapter selected, so nothing can be tuned.</p>`;
     return;
   }
-  const dnsNow = tw.currentDns?.length ? tw.currentDns.join(", ") : "automatic";
-  const planOff = tw.planPower === "off";
-  const best = state.dns?.result?.bestLabel;
-  const bestServers = state.dns?.result?.resolvers?.find((r) => r.id === state.dns.result.best)?.servers;
+  if (!state.catalog) {
+    box.innerHTML = `<p class="empty">The tweak catalog did not load. Restart the server (node server.mjs) and refresh.</p>`;
+    return;
+  }
 
-  box.innerHTML = `
-    <div class="fixes">
-      <div class="fix">
-        <div class="fix-info">
-          <div class="fix-title">DNS on ${esc(tw.alias)}</div>
-          <div class="fix-note">now ${esc(dnsNow)}${tw.currentDns?.length ? " (fixed)" : ""}</div>
-        </div>
-        <div class="fix-actions">
-          ${
-            bestServers
-              ? `<button class="btn btn-small" data-action="dns-apply" data-servers='${esc(
-                  JSON.stringify(bestServers),
-                )}' data-label="${esc(best)}">Switch to ${esc(best)}</button>`
-              : `<span class="fix-note">Benchmark DNS first</span>`
-          }
-          <button class="btn btn-small btn-ghost" data-action="dns-reset">Automatic</button>
-        </div>
-      </div>
-
-      <div class="fix">
-        <div class="fix-info">
-          <div class="fix-title">Wireless power saving (power plan)</div>
-          <div class="fix-note">${
-            planOff
-              ? `<span class="ok">Maximum performance — verified: ${esc(tw.planDetail)}</span>`
-              : tw.planPower === "on"
-                ? `On — verified: ${esc(tw.planDetail)}. Windows throttles the radio to save power, which adds latency and the odd stutter.`
-                : "State could not be read on this system."
-          }<div class="sub-note">Power Options → Wireless Adapter Settings → Power Saving Mode, for the active scheme. This is separate from the switch below.</div></div>
-        </div>
-        <div class="fix-actions">
-          ${
-            planOff
-              ? `<button class="btn btn-small btn-ghost" data-action="plan-power-on">Restore</button>`
-              : `<button class="btn btn-small" data-action="plan-power-off">Maximum performance</button>`
-          }
-        </div>
-      </div>
-
-      <div class="fix">
-        <div class="fix-info">
-          <div class="fix-title">NIC power management</div>
-          <div class="fix-note">${
-            tw.nicPower === "off"
-              ? `<span class="ok">Disabled — verified: ${esc(tw.nicDetail)}</span>`
-              : tw.nicPower === "on"
-                ? `On — verified: ${esc(tw.nicDetail)}. The device can be powered down while idle, which drops the radio for a moment.`
-                : tw.nicPower === "unsupported"
-                  ? `<span class="dim">Not available on this adapter</span><div class="sub-note">${esc(tw.nicDetail)}</div>`
-                  : "State could not be read on this system."
-          }</div>
-        </div>
-        <div class="fix-actions">
-          ${
-            tw.nicPower === "off"
-              ? `<button class="btn btn-small btn-ghost" data-action="nic-power-on">Restore</button>`
-              : tw.nicPower === "on"
-                ? `<button class="btn btn-small" data-action="nic-power-off">Disable</button>`
-                : `<button class="btn btn-small" disabled>Not available</button>`
-          }
-        </div>
-      </div>
-
-      <div class="fix">
-        <div class="fix-info">
-          <div class="fix-title">Nagle's algorithm</div>
-          <div class="fix-note">${
-            tw.nagleAvailable === false
-              ? "Unavailable: this adapter has no TCP/IP registry key to configure."
-              : tw.nagleDisabled
-                ? `<span class="ok">Disabled — verified in the registry: TcpAckFrequency=${esc(
-                    tw.nagleValues?.tcpAckFrequency,
-                  )}, TCPNoDelay=${esc(tw.nagleValues?.tcpNoDelay)}</span>`
-                : `On — Windows batches small packets, which adds a few ms to TCP games${
-                    tw.nagleValues?.tcpAckFrequency != null ? ` (TcpAckFrequency=${esc(tw.nagleValues.tcpAckFrequency)})` : ""
-                  }`
-          }</div>
-        </div>
-        <div class="fix-actions">
-          ${
-            tw.nagleAvailable === false
-              ? `<button class="btn btn-small" disabled>Not available</button>`
-              : tw.nagleDisabled
-                ? `<button class="btn btn-small btn-ghost" data-action="nagle-on">Restore</button>`
-                : `<button class="btn btn-small" data-action="nagle-off">Disable</button>`
-          }
-        </div>
-      </div>
-
-      <div class="fix">
-        <div class="fix-info">
-          <div class="fix-title">Wi-Fi radio power save (driver)</div>
-          <div class="fix-note">${
-            !tw.adapterTuning
-              ? `<span class="dim">Not available — this driver exposes no MIMO power-save or roaming property</span>`
-              : `<span class="${tw.adapterTuning.needsFix ? "warn" : "ok"}">${
-                  tw.adapterTuning.needsFix ? "Not tuned — vendor defaults" : "Tuned"
-                }</span> — ${esc(tw.adapterTuning.items.map((i) => i.display).join(" · "))}<div class="sub-note">${esc(
-                  tw.adapterTuning.needsFix
-                    ? tw.adapterTuning.reason
-                    : "Applied on request; no soak here has shown a gain. Restore puts the previous values back.",
-                )}</div>`
-          }</div>
-        </div>
-        <div class="fix-actions">
-          ${
-            !tw.adapterTuning
-              ? `<button class="btn btn-small" disabled>Not available</button>`
-              : tw.adapterTuning.needsFix
-                ? `<button class="btn btn-small" data-action="adapter-tuning-off">Apply anyway</button>`
-                : `<button class="btn btn-small btn-ghost" data-action="adapter-tuning-on">Revert</button>`
-          }
-        </div>
-      </div>
-
-      <div class="fix">
-        <div class="fix-info">
-          <div class="fix-title">Wi-Fi auto-connect order</div>
-          <div class="fix-note">${
-            !tw.wifiOrder
-              ? `<span class="dim">Not applicable — this adapter is not wireless</span>`
-              : !tw.wifiOrder.readable
-                ? `<span class="warn">Windows returned no profile list, so nothing can be reordered.</span>`
-                : tw.wifiOrder.isFirst
-                  ? `<span class="ok">First — ${esc(tw.wifiOrder.target)}</span>${
-                      tw.wifiOrder.appliedByUs ? " · applied by PingLab" : ""
-                    }<div class="sub-note">Windows rejoins this network after an adapter reset instead of another saved one.</div>`
-                  : `Joined network is #${esc(tw.wifiOrder.position)} of ${esc(
-                      tw.wifiOrder.profiles.length,
-                    )} — an adapter reset can land on another saved network.<div class="sub-note">${esc(
-                      tw.wifiOrder.profiles.slice(0, 4).join(" > "),
-                    )}</div>`
-          }</div>
-        </div>
-        <div class="fix-actions">
-          ${
-            !tw.wifiOrder || !tw.wifiOrder.readable
-              ? `<button class="btn btn-small" disabled>Not available</button>`
-              : tw.wifiOrder.isFirst && tw.wifiOrder.appliedByUs
-                ? `<button class="btn btn-small btn-ghost" data-action="wifi-order-restore">Restore order</button>`
-                : tw.wifiOrder.isFirst
-                  ? `<button class="btn btn-small" disabled>Already first</button>`
-                  : `<button class="btn btn-small" data-action="wifi-order-first">Move first</button>`
-          }
-        </div>
-      </div>
-    </div>`;
+  box.innerHTML = `<div class="fixes">${["dns", "plan-power", "nic-power", "nagle", "radio-tuning", "wifi-order"]
+    .map((id) => fixCard(id, tw))
+    .join("")}</div>`;
 
   const pending = state.pending;
   const badge = $("pendingBadge");
@@ -574,6 +593,8 @@ function renderFixes() {
   log.innerHTML = items.length
     ? items.map((h) => `<li>${esc(h.action)} · ${esc(h.detail?.alias || "")} · ${timeOf(h.at)}</li>`).join("")
     : "";
+
+  renderPresets();
 }
 
 function renderHistory(runs) {
@@ -604,6 +625,7 @@ async function loadState() {
   state.pending = s.pending;
   state.endpoints = s.endpoints || [];
   state.resolvers = s.resolvers || [];
+  state.catalog = s.catalog || null;
   state.alias = s.connection.activeRoute?.alias || null;
   renderLink();
   renderConnection();
@@ -679,6 +701,11 @@ async function scanWifi() {
 async function tweak(action, extra = {}) {
   if (!state.alias) return toast("No active adapter to change", "bad");
   if (action === "restore-all" && !confirm("Restore every setting this app changed back to how it was?")) return;
+  if (
+    action === "apply-preset" &&
+    !confirm("Apply this preset? Every setting in it records its own restore point first, so each step can still be undone on its own.")
+  )
+    return;
   const label =
     {
       "dns-apply": "Applying DNS…",
@@ -696,6 +723,7 @@ async function tweak(action, extra = {}) {
       "wifi-order-first": "Requesting admin…",
       "wifi-order-restore": "Requesting admin…",
       "restore-all": "Requesting admin…",
+      "apply-preset": "Applying preset…",
     }[action] || "Working…";
   toast(`${label} Approve the Windows prompt if it appears.`);
   const r = await api("/api/tweak", { action, alias: state.alias, ...extra });
@@ -911,6 +939,11 @@ document.addEventListener("click", async (e) => {
   if (action === "open-location") {
     const r = await api("/api/open-location", {});
     toast(r.ok ? "Opened Windows Location settings — enable it, then press Refresh." : r.message || "Could not open settings");
+    return;
+  }
+  if (action === "apply-preset") {
+    el.disabled = true;
+    await tweak(action, { preset: el.dataset.preset });
     return;
   }
   if (action === "dns-apply") {

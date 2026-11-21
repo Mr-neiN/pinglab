@@ -23,7 +23,8 @@ import { fileURLToPath } from "node:url";
 import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
-import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows } from "./lib/tweaks.mjs";
+import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions } from "./lib/tweaks.mjs";
+import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, tweakByCli, presetsFor, validateCatalog } from "./lib/catalog.mjs";
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
 import { saveRun, previousRun, listRuns } from "./lib/db.mjs";
@@ -75,15 +76,12 @@ function colour(value, good, warn) {
 
 /* -------------------------------------------------------------- app state */
 
-// One table for the three reversible fixes: [apply, revert] by the key that toggles them.
-const FIX_ACTIONS = {
-  "1": ["plan-power-off", "plan-power-on"],
-  "2": ["nic-power-off", "nic-power-on"],
-  "3": ["nagle-off", "nagle-on"],
-  "4": ["adapter-tuning-off", "adapter-tuning-on"],
-  "5": ["wifi-order-first", "wifi-order-restore"],
-};
-const FIX_KEY_BY_NAME = { plan: "1", nic: "2", nagle: "3", wifi: "4", order: "5" };
+// The fixes view lists the catalog minus DNS, which has its own `d` view because choosing
+// a resolver needs the benchmark first. Both tables come from the catalog, so a new row
+// becomes a key and a CLI name without touching this file.
+const FIX_ROWS = TWEAKS.filter((t) => t.id !== "dns");
+const FIX_ACTIONS = Object.fromEntries(FIX_ROWS.map((t) => [t.rowKey, [t.actions.apply, t.actions.revert]]));
+const FIX_KEY_BY_NAME = Object.fromEntries(TWEAKS.map((t) => [t.cli, t.rowKey]));
 
 const ui = {
   view: "dash",
@@ -153,6 +151,21 @@ async function runTweak(action) {
   ui.busy = null;
   const outcome = tweakOutcome(res);
   say(outcome.message, outcome.kind, outcome.ok ? 6000 : 9000);
+  await refreshCore();
+}
+
+/** Apply a named preset through the same rows, then show what happened. */
+async function runPreset(presetId) {
+  const alias = ui.core?.alias;
+  if (!alias) {
+    say("No active adapter to change.", "bad");
+    return;
+  }
+  ui.busy = "applying the preset…";
+  const res = await applyPreset(alias, presetId);
+  ui.busy = null;
+  const outcome = tweakOutcome(res);
+  say(outcome.message, outcome.kind, 10000);
   await refreshCore();
 }
 
@@ -278,81 +291,90 @@ function viewDash(W) {
   return out;
 }
 
+function wrapText(text, width) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    if (line && (line + " " + w).length > width) {
+      lines.push(line);
+      line = w;
+    } else line = line ? line + " " + w : w;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** Current state of one catalog row, in the words the fixes view prints. */
+function fixState(id, tw) {
+  switch (id) {
+    case "plan-power":
+      return {
+        on: tw.planPower === "off",
+        state: tw.planPower === "off" ? "maximum performance" : tw.planDetail || tw.planPower,
+      };
+    case "nic-power":
+      return {
+        on: tw.nicPower === "off",
+        state: tw.nicPower === "unsupported" ? "not available on this adapter" : tw.nicDetail || tw.nicPower,
+        disabled: tw.nicPower === "unsupported" || tw.nicPower === "unknown",
+      };
+    case "nagle":
+      return {
+        on: tw.nagleDisabled === true,
+        state: tw.nagleDisabled
+          ? `disabled · TcpAckFrequency=${tw.nagleValues?.tcpAckFrequency ?? "—"}, TCPNoDelay=${tw.nagleValues?.tcpNoDelay ?? "—"}`
+          : "on · Windows batches small packets",
+        disabled: tw.nagleAvailable === false,
+      };
+    case "radio-tuning":
+      return {
+        on: tw.adapterTuning ? !tw.adapterTuning.needsFix : false,
+        state: !tw.adapterTuning
+          ? "not readable on this adapter"
+          : `${tw.adapterTuning.needsFix ? "vendor defaults" : "applied"} · ${tw.adapterTuning.items.map((i) => i.display).join(", ")}`,
+        disabled: !tw.adapterTuning,
+      };
+    case "wifi-order":
+      return {
+        on: Boolean(tw.wifiOrder?.appliedByUs && tw.wifiOrder?.isFirst),
+        state: !tw.wifiOrder
+          ? "not the wireless adapter"
+          : !tw.wifiOrder.readable
+            ? "profile list unreadable"
+            : tw.wifiOrder.isFirst
+              ? `first: ${tw.wifiOrder.target}`
+              : tw.wifiOrder.target
+                ? `${tw.wifiOrder.target} is #${tw.wifiOrder.position} of ${tw.wifiOrder.profiles.length}`
+                : "not joined to a saved profile",
+        disabled: !tw.wifiOrder || !tw.wifiOrder.readable,
+      };
+    default:
+      return { on: false, state: "unknown" };
+  }
+}
+
 function viewFixes(W) {
   const tw = ui.core?.tw;
   if (!tw) return ["", ` ${D}reading system state…${R}`];
-  const items = [
-    {
-      key: "1",
-      on: tw.planPower === "off",
-      title: "Wireless power saving (power plan)",
-      state: tw.planPower === "off" ? `maximum performance` : `${tw.planDetail || tw.planPower}`,
-      detail: "Power Options → Wireless Adapter Settings → Power Saving Mode.",
-      action: tw.planPower === "off" ? "plan-power-on" : "plan-power-off",
-    },
-    {
-      key: "2",
-      on: tw.nicPower === "off",
-      title: "NIC power management (device)",
-      state: tw.nicPower === "unsupported" ? "not available on this adapter" : tw.nicDetail || tw.nicPower,
-      detail: tw.nicPower === "unsupported" ? "Driver exposes no power-management setting." : "Allow the computer to turn off this device.",
-      action: tw.nicPower === "off" ? "nic-power-on" : "nic-power-off",
-      disabled: tw.nicPower === "unsupported" || tw.nicPower === "unknown",
-    },
-    {
-      key: "3",
-      on: tw.nagleDisabled === true,
-      title: "Nagle's algorithm",
-      state: tw.nagleDisabled ? "disabled" : "on",
-      detail: `TcpAckFrequency=${tw.nagleValues?.tcpAckFrequency ?? "—"}, TCPNoDelay=${tw.nagleValues?.tcpNoDelay ?? "—"}`,
-      action: tw.nagleDisabled ? "nagle-on" : "nagle-off",
-    },
-    {
-      key: "4",
-      on: tw.adapterTuning ? !tw.adapterTuning.needsFix : false,
-      title: "Wi-Fi radio power save (desktop)",
-      state: !tw.adapterTuning
-        ? "not readable on this adapter"
-        : tw.adapterTuning.needsFix
-          ? "not tuned for a fixed desktop"
-          : `tuned: ${tw.adapterTuning.items.map((i) => i.display).join(", ")}`,
-      detail: !tw.adapterTuning
-        ? "The driver exposes neither setting."
-        : `Now ${tw.adapterTuning.items.map((i) => i.display).join(", ")}. ${
-            tw.adapterTuning.needsFix ? tw.adapterTuning.reason : "Applied on request; no soak here has shown a gain."
-          }`,
-      action: tw.adapterTuning && !tw.adapterTuning.needsFix ? "adapter-tuning-on" : "adapter-tuning-off",
-      disabled: !tw.adapterTuning,
-    },
-    {
-      key: "5",
-      on: Boolean(tw.wifiOrder?.appliedByUs && tw.wifiOrder?.isFirst),
-      title: "Wi-Fi auto-connect order",
-      state: !tw.wifiOrder
-        ? "not the wireless adapter"
-        : !tw.wifiOrder.readable
-          ? "profile list unreadable"
-          : tw.wifiOrder.isFirst
-            ? `first: ${tw.wifiOrder.target}`
-            : tw.wifiOrder.target
-              ? `${tw.wifiOrder.target} is #${tw.wifiOrder.position} of ${tw.wifiOrder.profiles.length}`
-              : "not joined to a saved profile",
-      detail: !tw.wifiOrder || !tw.wifiOrder.readable
-        ? "netsh wlan show profiles reported nothing to reorder."
-        : `Order: ${tw.wifiOrder.profiles.slice(0, 4).join(" > ")}${tw.wifiOrder.profiles.length > 4 ? " > …" : ""}. Windows rejoins the first profile it can see after an adapter reset.`,
-      action: tw.wifiOrder?.appliedByUs && tw.wifiOrder?.isFirst ? "wifi-order-restore" : "wifi-order-first",
-      disabled: !tw.wifiOrder || !tw.wifiOrder.readable,
-    },
-  ];
   const out = [""];
-  for (const it of items) {
-    const mark = it.disabled ? `${GRY}⨯${R}` : it.on ? `${GRN}✓${R}` : `${GRY}–${R}`;
-    out.push(`  ${INV} ${it.key} ${R} ${mark} ${B}${it.title}${R}`);
-    out.push(`       ${D}${it.state}${R}`);
-    out.push(`       ${D}${it.detail}${R}`);
+  const width = Math.max(52, Math.min(W - 12, 92));
+  for (const t of FIX_ROWS) {
+    const st = fixState(t.id, tw);
+    const mark = st.disabled ? `${GRY}⨯${R}` : st.on ? `${GRN}✓${R}` : `${GRY}–${R}`;
+    const risk = RISK[t.risk]?.label || t.risk;
+    const riskColour = t.risk === "safe" ? GRN : t.risk === "moderate" ? YEL : RED;
+    const where = presetsFor(t.id).map((p) => p.id).join(", ");
+    out.push(`  ${INV} ${t.rowKey} ${R} ${mark} ${B}${t.label}${R}  ${riskColour}[${risk}]${R}${where ? ` ${D}in: ${where}${R}` : ""}`);
+    out.push(`       ${D}now:${R} ${st.state}`);
+    out.push(`       ${D}sets:${R}`);
+    for (const line of wrapText(t.what, width)) out.push(`         ${D}${line}${R}`);
+    out.push(`       ${D}trade:${R}`);
+    for (const line of wrapText(t.tradeoff, width)) out.push(`         ${D}${line}${R}`);
     out.push("");
   }
-  out.push(`  ${D}Press 1-5 to apply or revert. A applies every fix behind one admin prompt. R restores everything PingLab changed.${R}`);
+  out.push(`  ${D}Press 1-5 to apply or revert one. S applies the safe preset, L the lowest-latency preset, R restores everything. DNS lives in the d view.${R}`);
+  out.push(`  ${D}Every apply records a restore point first, and no preset contains the experimental radio row.${R}`);
   return out;
 }
 
@@ -563,20 +585,15 @@ async function handleKey(ch) {
   if (ui.view === "fixes") {
     const pair = FIX_ACTIONS[ch];
     if (pair) {
-      const tw = ui.core?.tw || {};
-      const isOn = {
-        "1": tw.planPower === "off",
-        "2": tw.nicPower === "off",
-        "3": tw.nagleDisabled === true,
-        "4": tw.adapterTuning ? !tw.adapterTuning.needsFix : false,
-        "5": Boolean(tw.wifiOrder?.appliedByUs && tw.wifiOrder?.isFirst),
-      }[ch];
-      return runTweak(pair[isOn ? 1 : 0]);
+      const row = FIX_ROWS.find((t) => t.rowKey === ch);
+      const on = row ? fixState(row.id, ui.core?.tw || {}).on : false;
+      return runTweak(pair[on ? 1 : 0]);
     }
-    if (ch === "A") return runTweak("apply-all");
+    if (ch === "S") return runPreset("safe");
+    if (ch === "L") return runPreset("latency");
     if (ch === "R") return runTweak("restore-all");
   }
-  if (ui.view === "wifi" && ch === "s") return runScan();
+    if (ui.view === "wifi" && ch === "s") return runScan();
   if (ui.view === "dns") {
     if (ch === "D") return runTweak("dns-best");
     if (ch === "A") return runTweak("dns-reset");
@@ -633,6 +650,9 @@ async function bridgeCommand(cmd, args = {}) {
         runs: ui.core?.runs || [],
         soaks: ui.core?.soaks || [],
         soak: soakStatus(),
+        // The catalog travels with the state so the GUI draws its own labels and preset
+        // buttons from the same list the other surfaces use.
+        catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
       };
     }
     case "probe":
@@ -666,7 +686,16 @@ async function bridgeCommand(cmd, args = {}) {
       // A bridge client may apply before it ever asked for state; without core state
       // runTweak would bail out with "No active adapter to change.".
       if (!ui.core) await refreshCore();
-      await runTweak(String(args.action || ""));
+      if (args.preset) {
+        const preset = presetById(String(args.preset));
+        if (!preset) throw new Error(`Unknown preset: ${args.preset}`);
+        if (!ui.core?.alias) throw new Error("No active adapter to change.");
+        const res = await applyPreset(ui.core.alias, preset.id);
+        const outcome = tweakOutcome(res);
+        say(outcome.message, outcome.kind, 10000);
+      } else {
+        await runTweak(String(args.action || ""));
+      }
       return {
         message: ui.message?.text || null,
         kind: ui.message?.kind || null,
@@ -735,7 +764,10 @@ async function main() {
       "  node pinglab.mjs --dns         DNS resolver benchmark",
       "  node pinglab.mjs --soak [min]  soak test (default 10 min)",
       "  node pinglab.mjs --fixes       show reversible fixes",
+      "  node pinglab.mjs --presets     named presets and exactly what each applies",
+      "  node pinglab.mjs --preset X    X = safe | latency (applies that preset)",
       "  node pinglab.mjs --audit       every managed setting vs what Windows reports",
+      "  node pinglab.mjs --self-check  catalog, presets, dispatch and live state, no changes",
       "  node pinglab.mjs --apply X     X = plan | nic | nagle | wifi | order",
       "  node pinglab.mjs --revert X    undo one fix",
       "  node pinglab.mjs --restore     restore everything PingLab changed",
@@ -756,6 +788,21 @@ async function main() {
   if (has("--fixes")) {
     ui.view = "fixes";
     print(viewFixes(100).filter((l) => vis(l).trim()));
+    return;
+  }
+  if (has("--presets")) {
+    const lines = ["", ` ${B}PingLab${R} · presets`, ""];
+    for (const p of PRESETS) {
+      lines.push(`  ${B}${p.id}${R}  ${p.label}`);
+      for (const line of wrapText(p.summary, 86)) lines.push(`    ${line}`);
+      lines.push(`    ${D}applies, in this order:${R}`);
+      for (const t of presetTweaks(p)) lines.push(`      · ${t.label} ${D}[${RISK[t.risk]?.label || t.risk}]${R}`);
+      for (const line of wrapText(p.leaves, 86)) lines.push(`    ${D}${line}${R}`);
+      lines.push("");
+    }
+    lines.push(`  ${D}Each step goes through the same row as pressing its number, so each records its own restore point.${R}`);
+    lines.push(`  ${D}No preset contains an experimental setting, and none changes DNS.${R}`);
+    print(lines);
     return;
   }
   if (has("--audit")) {
@@ -798,12 +845,71 @@ async function main() {
     print(lines);
     return;
   }
+  if (has("--self-check")) {
+    // Read-only: validates the catalog and presets, then checks the live machine against
+    // them. A failure here is a bug in the app, not a setting the user chose.
+    const problems = [...validateCatalog().problems];
+    const actions = knownActions();
+    for (const t of TWEAKS) {
+      for (const a of [t.actions.apply, t.actions.revert]) {
+        if (!actions.has(a)) problems.push(`${t.id}: action "${a}" is not in runTweakAction`);
+      }
+    }
+    const tw = ui.core?.tw;
+    if (!tw) problems.push("no active adapter, so no setting could be read");
+    const rows = auditRows(tw);
+    for (const r of rows) {
+      if (!r.match) problems.push(`audit: ${r.setting} reports "${r.reported}" but Windows says "${r.observed}"`);
+    }
+    if (tw) {
+      for (const t of FIX_ROWS) {
+        if (fixState(t.id, tw).state === "unknown") problems.push(`${t.id}: the fixes view has no state text for this setting`);
+      }
+      if (!Array.isArray(tw.currentDns)) problems.push("dns: current servers could not be read");
+    }
+    const lines = ["", ` ${B}PingLab${R} · self-check`, ""];
+    lines.push(`  catalog      ${TWEAKS.length} settings, every one with what it changes, what it trades, a risk level and an undo`);
+    lines.push(`  defaults     all off until applied: ${TWEAKS.filter((t) => t.default === "off").length}/${TWEAKS.length}`);
+    lines.push(`  presets      ${PRESETS.map((p) => `${p.id} (${p.tweaks.length})`).join(", ")} · none experimental`);
+    lines.push(`  dispatch     ${actions.size} actions, every catalog action present`);
+    lines.push(`  audit        ${rows.filter((r) => r.match).length}/${rows.length} settings match what Windows reports`);
+    lines.push("");
+    if (problems.length) {
+      lines.push(`  ${RED}${problems.length} problem(s)${R}`);
+      for (const p of problems) lines.push(`   ${RED}·${R} ${p}`);
+      process.exitCode = 1;
+    } else {
+      lines.push(`  ${GRN}ok: catalog, presets, dispatch and live state all agree${R}`);
+    }
+    print(lines);
+    return;
+  }
+  if (has("--preset")) {
+    const id = after("--preset");
+    if (!presetById(id)) {
+      print([`Unknown preset "${id}". Use: ${PRESETS.map((p) => p.id).join(", ")}.`]);
+      process.exitCode = 1;
+      return;
+    }
+    const alias = ui.core?.alias;
+    const res = alias ? await applyPreset(alias, id) : { ok: false, error: "No active adapter to change." };
+    const outcome = tweakOutcome(res);
+    print([outcome.message]);
+    for (const step of res.data?.steps || []) {
+      const mark = step.ok ? "✓" : step.status === "skipped" ? "–" : "✗";
+      print([`  ${mark} ${step.label}: ${step.message}`]);
+    }
+    await refreshCore();
+    print([`pending=${ui.core?.pending?.count}`]);
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
   if (has("--apply") || has("--revert")) {
     const which = after(has("--apply") ? "--apply" : "--revert");
     const on = has("--apply");
     const action = FIX_ACTIONS[FIX_KEY_BY_NAME[which]]?.[on ? 0 : 1];
     if (!action) {
-      print([`Unknown fix "${which}". Use plan, nic, nagle, wifi or order.`]);
+      print([`Unknown fix "${which}". Use ${TWEAKS.map((t) => t.cli).join(", ")}.`]);
       process.exitCode = 1;
       return;
     }

@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
 import { snapshot, wifiScan, dnsServers, routes } from "./lib/net.mjs";
-import { tweakState, runTweakAction, tweakOutcome, pendingTweaks } from "./lib/tweaks.mjs";
+import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset } from "./lib/tweaks.mjs";
+import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
 import { saveRun, listRuns, saveTweak, listTweaks, previousRun } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, listSoakRuns, getSoakRun, compareSoaks, soakLabel } from "./lib/soak.mjs";
@@ -99,6 +100,9 @@ const server = http.createServer(async (req, res) => {
         endpoints: config.endpoints,
         resolvers: RESOLVERS,
         recentRuns: listRuns(null, 12),
+        // Same catalog the TUI and the GUI render, so labels, trade-offs, risk levels and
+        // preset contents cannot differ between surfaces.
+        catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
       });
     }
 
@@ -172,11 +176,18 @@ const server = http.createServer(async (req, res) => {
 
       let result;
       try {
-        result = await runTweakAction(alias, action, { servers: body.servers });
+        if (action === "apply-preset") {
+          if (!presetById(body.preset)) {
+            return sendJson(res, 400, { ok: false, error: `Unknown preset: ${body.preset ?? "(none)"}` });
+          }
+          result = await applyPreset(alias, String(body.preset));
+        } else {
+          result = await runTweakAction(alias, action, { servers: body.servers });
+        }
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: String(err?.message || err) });
       }
-      if (result.ok) saveTweak(action, { alias, servers: body.servers, data: result.data ?? null });
+      if (result.ok) saveTweak(action, { alias, servers: body.servers, preset: body.preset, data: result.data ?? null });
       const tw = await tweakState(alias);
       // "This adapter cannot do that" and a closed UAC prompt are expected outcomes, not
       // server errors; only a real failure is a 500.

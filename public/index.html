@@ -108,10 +108,11 @@
 
         <section class="card">
           <header class="card-head">
-            <h2>Fixes <span class="hint">each one is reversible</span></h2>
+            <h2>Fixes <span class="hint">every one is reversible and off until you press it</span></h2>
             <span id="pendingBadge" class="badge hidden"></span>
           </header>
-          <p class="meta">Every change below opens a Windows administrator prompt. Nothing is applied until you approve it.</p>
+          <p class="meta">Every change below opens a Windows administrator prompt, and each one records a restore point first. Nothing is applied until you approve it.</p>
+          <div id="presetBar" class="presets"></div>
           <div id="fixesBox"><p class="empty">Loading…</p></div>
           <div class="editor-actions">
             <button id="restoreAll" class="btn btn-danger">Restore everything</button>

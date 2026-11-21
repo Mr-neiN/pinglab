@@ -272,3 +272,46 @@ main { padding: 22px 28px 48px; max-width: 1320px; margin: 0 auto; }
   main { padding: 16px 14px 40px; }
   .topbar { padding: 14px; }
 }
+
+/* ---- risk levels and presets -------------------------------------------------
+   The risk badge is generated from lib/catalog.mjs, so its text always matches the
+   terminal and the GUI. Colour is only a hint; the badge and the title attribute carry
+   the meaning for anyone who cannot see it. */
+.risk {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+  border: 1px solid currentColor;
+}
+.risk-safe { color: #0a7a3d; }
+.risk-moderate { color: #a56900; }
+.risk-experimental { color: #b21e1e; }
+.small { font-size: 11px; margin-left: 8px; }
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+.preset {
+  border: 1px solid var(--line, #e3e3e3);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.preset-list {
+  list-style: none;
+  margin: 2px 0;
+  padding: 0;
+  font-size: 12px;
+}
+.preset-list li { padding: 1px 0; }
+.preset .btn { align-self: flex-start; margin-top: 4px; }
