@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PingLab — gaming network doctor</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">PL</div>
+        <div>
+          <h1>PingLab</h1>
+          <p class="tag">Measures the real cause of gaming lag, then fixes what is actually broken</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div id="linkPill" class="pill pill-idle">reading adapter…</div>
+        <button id="runAll" class="btn btn-primary">Run full test</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="verdict" class="verdict">
+        <span class="verdict-label">Verdict</span>
+        <p id="verdictText">No measurement yet. Run the test to see what is actually limiting your connection.</p>
+      </section>
+
+      <div class="grid">
+        <section class="card card-wide">
+          <header class="card-head">
+            <h2>Latency &amp; loss <span class="hint">TCP handshake RTT — what a game actually does</span></h2>
+            <button id="runProbe" class="btn">Test latency</button>
+          </header>
+          <div id="probeMeta" class="meta">Idle.</div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Endpoint</th>
+                <th>IP</th>
+                <th class="num">avg</th>
+                <th class="num">p95</th>
+                <th class="num">jitter</th>
+                <th class="num">loss</th>
+                <th class="num">min–max</th>
+              </tr>
+            </thead>
+            <tbody id="probeBody">
+              <tr><td colspan="7" class="empty">No measurement yet.</td></tr>
+            </tbody>
+          </table>
+          <div id="icmpBox" class="subpanel hidden"></div>
+          <details class="editor">
+            <summary>Edit endpoints — put your game server's region IP here for the truest number</summary>
+            <div id="endpointRows" class="endpoint-rows"></div>
+            <div class="editor-actions">
+              <button id="addEndpoint" class="btn btn-ghost">+ Add endpoint</button>
+              <button id="saveEndpoints" class="btn">Save endpoints</button>
+              <span id="endpointMsg" class="meta"></span>
+            </div>
+          </details>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h2>Bufferbloat <span class="hint">ping under load</span></h2>
+            <button id="runBloat" class="btn">Run test</button>
+          </header>
+          <div id="bloatBox" class="bloat">
+            <p class="empty">Not tested. This downloads for ~7 s to load your line, so skip it on metered data.</p>
+          </div>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h2>Connection</h2>
+            <button id="refreshLink" class="btn btn-ghost">Refresh</button>
+          </header>
+          <div id="connectionBox"><p class="empty">Reading adapters…</p></div>
+          <div id="wifiHint" class="hintbox hidden"></div>
+          <div class="scan">
+            <button id="scanWifi" class="btn btn-ghost">Scan Wi-Fi channels</button>
+            <span id="scanMsg" class="meta"></span>
+          </div>
+          <div id="scanBox" class="hidden"></div>
+        </section>
+
+        <section class="card card-wide">
+          <header class="card-head">
+            <h2>DNS benchmark <span class="hint">cold resolution of 10 game domains</span></h2>
+            <button id="runDns" class="btn">Benchmark DNS</button>
+          </header>
+          <div id="dnsBox"><p class="empty">Not tested. Fast DNS fixes slow store pages and sign-ins, not your in-game ping.</p></div>
+        </section>
+
+        <section class="card card-wide">
+          <header class="card-head">
+            <h2>Soak test <span class="hint">continuous pings, every sample stored — 10+ minutes gives real jitter and loss</span></h2>
+            <div class="card-actions soak-actions">
+              <label class="inline-field">minutes <input id="soakMinutes" type="number" min="1" max="60" value="10" /></label>
+              <button id="startSoak" class="btn btn-primary">Start soak</button>
+              <button id="stopSoak" class="btn btn-ghost" disabled>Stop</button>
+            </div>
+          </header>
+          <div id="soakBox"><p class="empty">Not run. A 4-second burst cannot measure jitter or loss; a 10-minute soak can.</p></div>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h2>Fixes <span class="hint">each one is reversible</span></h2>
+            <span id="pendingBadge" class="badge hidden"></span>
+          </header>
+          <p class="meta">Every change below opens a Windows administrator prompt. Nothing is applied until you approve it.</p>
+          <div id="fixesBox"><p class="empty">Loading…</p></div>
+          <div class="editor-actions">
+            <button id="restoreAll" class="btn btn-danger">Restore everything</button>
+          </div>
+          <ul id="changeLog" class="changelog"></ul>
+        </section>
+
+        <section class="card">
+          <header class="card-head">
+            <h2>History</h2>
+            <button id="refreshHistory" class="btn btn-ghost">Refresh</button>
+          </header>
+          <ul id="historyList" class="history"><li class="empty">No runs yet.</li></ul>
+        </section>
+      </div>
+
+      <footer class="foot">
+        Runs locally on 127.0.0.1. Nothing is sent anywhere except the latency probes themselves.
+        No software can raise your ISP speed — this finds what is actually wrong and shows you the numbers.
+      </footer>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
