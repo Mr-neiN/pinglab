@@ -19,7 +19,7 @@ Three surfaces, one engine (`lib/`) and one dispatch table for every action (`li
 
 | surface | how | notes |
 |---|---|---|
-| Desktop GUI | double-click `PingLab.cmd` | PowerShell WinForms; tabs for Overview, Fixes, Wi-Fi, Latency, Soak test |
+| Desktop GUI | double-click `PingLab.cmd` | PowerShell WinForms; tabs for Overview, Fixes, Wi-Fi, Latency, Soak test. The Fixes tab carries all six settings, including DNS (benchmark, then use the winner, or go back to automatic) |
 | Terminal | `PingLab-TUI.cmd`, or `node pinglab.mjs` | keys shown at the bottom of each view |
 | Web UI | `node server.mjs` (or `npm start`) → <http://127.0.0.1:4747> | bound to loopback only |
 
@@ -36,7 +36,8 @@ node pinglab.mjs --wifi        channel and band diagnosis
 node pinglab.mjs --probe       latency to the configured game endpoints
 node pinglab.mjs --dns         DNS resolver benchmark
 node pinglab.mjs --soak [min]  soak test, default 10 minutes
-node pinglab.mjs --apply X     X = plan | nic | nagle | wifi | order
+node pinglab.mjs --apply X     X = plan | nic | nagle | wifi | order | dns (dns benchmarks first and
+                               writes the winner only; without a clear winner it leaves DNS alone)
 node pinglab.mjs --revert X    undo that one setting
 node pinglab.mjs --restore     restore everything PingLab changed
 node pinglab.mjs --json        raw snapshot as JSON

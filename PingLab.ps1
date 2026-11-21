@@ -197,11 +197,11 @@ $tabFixes = New-Tab 'Fixes'
 $tlpFixes = New-Object System.Windows.Forms.TableLayoutPanel
 $tlpFixes.Dock = 'Fill'
 $tlpFixes.ColumnCount = 3
-$tlpFixes.RowCount = 6
+$tlpFixes.RowCount = 7
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 300)))
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 160)))
-for ($i = 0; $i -lt 5; $i++) {
+for ($i = 0; $i -lt 6; $i++) {
     [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 74)))
 }
 [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
@@ -211,7 +211,7 @@ $fixTip.AutoPopDelay = 30000
 $fixTip.InitialDelay = 400
 $fixTip.ReshowDelay = 100
 
-function New-FixRow([int]$row, [string]$title, [string]$hint) {
+function New-FixRow([int]$row, [string]$title, [string]$hint, [string]$altText = '') {
     $lblTitle = New-Object System.Windows.Forms.Label
     $lblTitle.Text = $title
     $lblTitle.Font = New-Object System.Drawing.Font('Segoe UI', 9.5, [System.Drawing.FontStyle]::Bold)
@@ -239,15 +239,30 @@ function New-FixRow([int]$row, [string]$title, [string]$hint) {
     $lblState.TextAlign = 'MiddleLeft'
     $lblState.Margin = New-Object System.Windows.Forms.Padding(0, 8, 8, 8)
 
+    # A row may carry a second button (DNS: use the benchmarked winner, or go back to the
+    # router), so the actions live in a stack that fits the 74 px row either way.
+    $btnCell = New-Object System.Windows.Forms.FlowLayoutPanel
+    $btnCell.FlowDirection = 'TopDown'
+    $btnCell.WrapContents = $false
+    $btnCell.Dock = 'Fill'
+    $btnCell.Margin = New-Object System.Windows.Forms.Padding(0)
+
     $btn = New-Button 'Apply' 140
-    $btn.Margin = New-Object System.Windows.Forms.Padding(0, 20, 0, 0)
-    $btn.Anchor = 'Left,Top'
+    $btn.Margin = New-Object System.Windows.Forms.Padding(0, $(if ($altText) { 6 } else { 20 }), 0, 0)
+    $btnCell.Controls.Add($btn)
+
+    $btnAlt = $null
+    if ($altText) {
+        $btnAlt = New-Button $altText 140
+        $btnAlt.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+        $btnCell.Controls.Add($btnAlt)
+    }
 
     $tlpFixes.Controls.Add($cell, 0, $row)
     $tlpFixes.Controls.Add($lblState, 1, $row)
-    $tlpFixes.Controls.Add($btn, 2, $row)
+    $tlpFixes.Controls.Add($btnCell, 2, $row)
 
-    return @{ Label = $lblState; Button = $btn; Hint = $lblHint; Title = $lblTitle }
+    return @{ Label = $lblState; Button = $btn; Button2 = $btnAlt; Hint = $lblHint; Title = $lblTitle }
 }
 
 $rowPlan = New-FixRow 0 'Wireless power saving' 'Power Options -> Wireless Adapter Settings -> Power Saving Mode'
@@ -255,6 +270,8 @@ $rowNic = New-FixRow 1 'NIC power management' 'Device Manager -> adapter -> Powe
 $rowNagle = New-FixRow 2 "Nagle's algorithm" 'TcpAckFrequency / TCPNoDelay on this interface'
 $rowWifi = New-FixRow 3 'Wi-Fi radio power save (desktop)' 'MIMO power save + roaming aggressiveness, from the driver itself.'
 $rowOrder = New-FixRow 4 'Wi-Fi auto-connect order' 'netsh wlan show profiles order - the network Windows rejoins after an adapter reset.'
+$rowDns = New-FixRow 5 'DNS servers' 'Benchmark the resolvers PingLab knows, or hand the adapter back to your router.' 'Automatic'
+$rowDns.Button.Text = 'Benchmark'
 
 $panelRestore = New-Object System.Windows.Forms.Panel
 $panelRestore.Dock = 'Fill'
@@ -271,7 +288,7 @@ $btnRestore = New-Button 'Restore everything PingLab changed' 300
 $btnRestore.Location = New-Object System.Drawing.Point(416, 12)
 $btnRestore.BackColor = [System.Drawing.Color]::FromArgb(252, 236, 236)
 $panelRestore.Controls.Add($btnRestore)
-$tlpFixes.Controls.Add($panelRestore, 0, 5)
+$tlpFixes.Controls.Add($panelRestore, 0, 6)
 $tlpFixes.SetColumnSpan($panelRestore, 3)
 $tabFixes.Controls.Add($tlpFixes)
 [void]$tabs.TabPages.Add($tabFixes)
@@ -447,7 +464,16 @@ function Update-Overview($d) {
 }
 
 function Update-Fixes($t) {
-    if ($null -eq $t) { return }
+    if ($null -eq $t) {
+        foreach ($row in @($rowPlan, $rowNic, $rowNagle, $rowWifi, $rowOrder, $rowDns)) {
+            $row.Label.Text = 'No active adapter - connect one and press Refresh'
+            $row.Label.ForeColor = [System.Drawing.Color]::FromArgb(130, 130, 130)
+            $row.Button.Enabled = $false
+            if ($null -ne $row.Button2) { $row.Button2.Enabled = $false }
+        }
+        $script:lastTweak = $null
+        return
+    }
     $script:lastTweak = $t
 
     if ($t.planPower -eq 'off') {
@@ -539,6 +565,18 @@ function Update-Fixes($t) {
         $rowOrder.Button.Enabled = $true
     }
 
+    $dnsServers = @($t.currentDns | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($dnsServers.Count -gt 0) {
+        $rowDns.Label.Text = "Fixed - $($dnsServers -join ', ')"
+        $rowDns.Label.ForeColor = [System.Drawing.Color]::FromArgb(165, 105, 0)
+        $rowDns.Button2.Enabled = $true
+    } else {
+        $rowDns.Label.Text = 'Automatic - the router hands out the servers'
+        $rowDns.Label.ForeColor = [System.Drawing.Color]::FromArgb(130, 130, 130)
+        $rowDns.Button2.Enabled = $false
+    }
+    $rowDns.Button.Enabled = $true
+
     # The catalog decides the risk tag, preset membership and the tooltip text; the code
     # above only decides the live state sentence and which button follows from it.
     if ($null -ne $script:catalog) {
@@ -551,7 +589,7 @@ function Update-Fixes($t) {
                 $presetMap[$id] = @($presetMap[$id]) + $p.id
             }
         }
-        $rows = @{ 'plan-power' = $rowPlan; 'nic-power' = $rowNic; 'nagle' = $rowNagle; 'radio-tuning' = $rowWifi; 'wifi-order' = $rowOrder }
+        $rows = @{ 'plan-power' = $rowPlan; 'nic-power' = $rowNic; 'nagle' = $rowNagle; 'radio-tuning' = $rowWifi; 'wifi-order' = $rowOrder; 'dns' = $rowDns }
         foreach ($t in $script:catalog.tweaks) {
             $row = $rows[$t.id]
             if ($null -eq $row) { continue }
@@ -680,6 +718,12 @@ function Refresh-State {
         param($r)
         if (-not $r.ok) { Log ('state error: ' + $r.error); Set-Status ('Error: ' + $r.error) 'bad'; return }
         Log 'state received'
+        # The first successful read replaces the startup placeholder, so the status bar does
+        # not keep saying "Reading system state..." while the window is already populated.
+        if ($script:startupPending) {
+            $script:startupPending = $false
+            Set-Status 'Ready.' 'good'
+        }
         $script:catalog = $r.data.catalog
         Update-Overview $r.data
         Update-Fixes $r.data.tweak
@@ -733,6 +777,41 @@ $btnOrder.Add_Click({
     $revert = $null -ne $wo -and $wo.isFirst -and $wo.appliedByUs
     Send-Tweak $(if ($revert) { 'wifi-order-restore' } else { 'wifi-order-first' })
 })
+
+$btnDnsBench = $rowDns.Button
+$btnDnsAuto = $rowDns.Button2
+
+$btnDnsBench.Add_Click({
+    Set-Status 'Benchmarking DNS resolvers - this takes about 20 seconds...' 'info'
+    $btnDnsBench.Enabled = $false
+    Send-Cmd 'dns' @{} {
+        param($r)
+        $btnDnsBench.Enabled = $true
+        if (-not $r.ok) { Set-Status ('DNS benchmark failed: ' + $r.error) 'bad'; return }
+        $res = $null
+        if ($null -ne $r.data -and $null -ne $r.data.dns) { $res = $r.data.dns.result }
+        $winner = $null
+        if ($null -ne $res -and $res.best) {
+            $winner = $res.resolvers | Where-Object { $_.id -eq $res.best } | Select-Object -First 1
+        }
+        if ($null -eq $winner) {
+            $detail = 'no resolver answered'
+            if ($null -ne $res) {
+                if ($null -ne $res.gapPct -and $res.gapPct -gt 0) { $detail = "$($res.leader) led by only $($res.gapPct)%" }
+                else { $detail = 'the resolvers are level' }
+            }
+            Set-Status "No clear winner ($detail), so DNS was left alone - it affects joins, not in-game ping." 'warn'
+            return
+        }
+        $servers = @($winner.servers)
+        $question = "$($winner.label) answered fastest.`n`nPoint this adapter's DNS at $($servers -join ', ')?"
+        $answer = [System.Windows.Forms.MessageBox]::Show($question, 'Use this resolver?', 'YesNo', 'Question')
+        if ($answer -ne 'Yes') { Set-Status 'DNS left unchanged.' 'info'; return }
+        Send-Tweak 'dns-best'
+    }
+})
+
+$btnDnsAuto.Add_Click({ Send-Tweak 'dns-reset' })
 
 $btnPresetSafe.Add_Click({ Send-Tweak '' 'safe' })
 $btnPresetLatency.Add_Click({ Send-Tweak '' 'latency' })
@@ -833,6 +912,7 @@ try {
 if ($started) {
     $timer.Start()
     Set-Status 'Reading system state...' 'info'
+    $script:startupPending = $true
     Refresh-State
     Send-Cmd 'soakStatus' @{} {
         param($r)

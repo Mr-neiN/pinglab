@@ -81,7 +81,6 @@ function colour(value, good, warn) {
 // becomes a key and a CLI name without touching this file.
 const FIX_ROWS = TWEAKS.filter((t) => t.id !== "dns");
 const FIX_ACTIONS = Object.fromEntries(FIX_ROWS.map((t) => [t.rowKey, [t.actions.apply, t.actions.revert]]));
-const FIX_KEY_BY_NAME = Object.fromEntries(TWEAKS.map((t) => [t.cli, t.rowKey]));
 
 const ui = {
   view: "dash",
@@ -908,14 +907,21 @@ async function main() {
   if (has("--apply") || has("--revert")) {
     const which = after(has("--apply") ? "--apply" : "--revert");
     const on = has("--apply");
-    const action = FIX_ACTIONS[FIX_KEY_BY_NAME[which]]?.[on ? 0 : 1];
-    if (!action) {
+    const spec = TWEAKS.find((t) => t.cli === which);
+    if (!spec) {
       print([`Unknown fix "${which}". Use ${TWEAKS.map((t) => t.cli).join(", ")}.`]);
       process.exitCode = 1;
       return;
     }
     ui.busy = null;
-    await runTweak(action);
+    // Which resolver is fastest is a measurement, so `--apply dns` benchmarks first and only
+    // writes a winner; without one it says so and leaves DNS alone, like the TUI's D key.
+    if (on && spec.id === "dns") {
+      await runDns();
+      await runTweak("dns-best");
+    } else {
+      await runTweak(on ? spec.actions.apply : spec.actions.revert);
+    }
     print([ui.message?.text || "done"]);
     await refreshCore();
     const tw = ui.core?.tw || {};
