@@ -65,6 +65,7 @@ jobs:
           node lib/db.test.mjs
           node lib/db-warning.test.mjs
           node lib/drift.test.mjs
+          node lib/concurrency.test.mjs
           node lib/server-guards.test.mjs
           node lib/wifi-band.test.mjs
           node lib/paths.test.mjs
