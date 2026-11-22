@@ -24,6 +24,7 @@ import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
+import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
 import { DATA_DIR } from "./lib/paths.mjs";
@@ -111,6 +112,9 @@ async function refreshCore() {
     alias,
     tw,
     pending: pendingTweaks(),
+    // A change PingLab made that Windows has since put back, so the fixes view can say it
+    // above the rows instead of leaving the contradiction to be noticed.
+    drift: driftStatus(tw),
     endpoints: config.endpoints,
     runs: listRuns(null, 12),
     soaks: listSoakRuns(6),
@@ -360,6 +364,16 @@ function viewFixes(W) {
   if (!tw) return ["", ` ${D}reading system state…${R}`];
   const out = [""];
   const width = Math.max(52, Math.min(W - 12, 92));
+  // A setting PingLab wrote that Windows has since put back is the one thing a reader of this
+  // view cannot work out from the rows alone: "now" and the restore points both look fine.
+  const drift = ui.core?.drift;
+  if (drift?.count) {
+    const sentences = wrapText(drift.text, width);
+    out.push(`  ${YEL}${sentences[0]}${R}`);
+    for (const line of sentences.slice(1)) out.push(`  ${YEL}${line}${R}`);
+    for (const r of drift.drifted) out.push(`   ${D}·${R} ${r.setting}: ${r.observation}`);
+    out.push("");
+  }
   for (const t of FIX_ROWS) {
     const st = fixState(t.id, tw);
     const mark = st.disabled ? `${GRY}⨯${R}` : st.on ? `${GRN}✓${R}` : `${GRY}–${R}`;
@@ -668,6 +682,7 @@ async function bridgeCommand(cmd, args = {}) {
         connection: ui.core?.connection || null,
         tweak: ui.core?.tw || null,
         pending: ui.core?.pending || null,
+        drift: ui.core?.drift || null,
         // Reported once per run, like /api/state does for the page: the GUI's status row is
         // the only place a user who just starts the app would otherwise never hear about a
         // database that had to be set aside.
@@ -808,7 +823,7 @@ async function main() {
   await refreshCore();
 
   if (has("--json")) {
-    print([JSON.stringify({ connection: ui.core.connection, tweak: ui.core.tw, pending: ui.core.pending }, null, 2)]);
+    print([JSON.stringify({ connection: ui.core.connection, tweak: ui.core.tw, pending: ui.core.pending, drift: ui.core.drift }, null, 2)]);
     return;
   }
   if (has("--fixes")) {
@@ -862,6 +877,19 @@ async function main() {
       ` ${B}why each one reads that way${R}`,
     );
     for (const r of rows) lines.push(`  ${D}·${R} ${r.setting}: ${r.note}`);
+    // Drift is not a mismatch: the app reads Windows correctly, and what it reads is a setting
+    // that is no longer the one PingLab left there. It gets its own section for that reason.
+    const drift = driftStatus(tw);
+    lines.push("", ` ${B}drift${R} — changes PingLab made that are no longer in place`);
+    if (!drift.count) {
+      lines.push(`  ${D}none: every change PingLab made is still in place${R}`);
+    } else {
+      lines.push(`  ${YEL}${drift.text}${R}`);
+      for (const r of drift.drifted) lines.push(`   ${D}·${R} ${r.setting}: ${r.observation}`);
+    }
+    for (const r of drift.rows.filter((x) => x.state === "unknown")) {
+      lines.push(`   ${D}? ${r.setting}: ${r.observation}${R}`);
+    }
     const backupProblem = pending.problem || null;
     lines.push(
       "",
@@ -946,6 +974,12 @@ async function main() {
     lines.push(`  audit        ${rows.filter((r) => r.match).length}/${rows.length} settings match what Windows reports`);
     lines.push(
       `  backups      ${backups.problem ? "unreadable - nothing will be written until it is repaired" : `${pendingTweaks().count} restore point(s), each saved before the change it undoes`}`,
+    );
+    // Read-only: drift is the user's machine, not a bug in the app, so it is reported and
+    // never counted as a self-check failure.
+    const driftNow = driftStatus(tw);
+    lines.push(
+      `  drift        ${driftNow.count ? `${driftNow.count} change(s) no longer in place - see --audit` : "every change PingLab made is still in place"}`,
     );
     lines.push(
       `  history      ${history.problem ? "damaged - set aside and started again, so this run's history begins empty" : "readable, so runs and soak tests are recorded"}`,

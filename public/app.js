@@ -626,7 +626,28 @@ function renderFixes() {
     ? items.map((h) => `<li>${esc(h.action)} · ${esc(h.detail?.alias || "")} · ${timeOf(h.at)}</li>`).join("")
     : "";
 
+  renderDriftNotice();
   renderPresets();
+}
+
+/**
+ * A setting PingLab wrote that Windows has since put back cannot be read off the cards: the
+ * live state looks like a machine you never tuned. The server compares the restore points with
+ * the live state and hands the page the same sentence the terminal and the GUI print.
+ */
+function renderDriftNotice() {
+  const el = $("driftNotice");
+  const drift = state.drift;
+  if (!drift?.count) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = `<strong>${esc(drift.text)}</strong><ul>${drift.drifted
+    .map((r) => `<li>${esc(r.setting)}: ${esc(r.observation)}</li>`)
+    .join("")}</ul>`;
+  el.title = drift.drifted.map((r) => `${r.setting}: ${r.observation}`).join("\n");
+  el.classList.remove("hidden");
 }
 
 /**

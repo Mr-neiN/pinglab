@@ -8,6 +8,7 @@ import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
 import { snapshot, wifiScan, dnsServers, routes } from "./lib/net.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset } from "./lib/tweaks.mjs";
+import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
 import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus } from "./lib/db.mjs";
@@ -175,6 +176,9 @@ const server = http.createServer(async (req, res) => {
         connection,
         tweakState: tw,
         pending: tweaks,
+        // A change PingLab made that Windows has since put back travels with the state, so the
+        // page can say it above the rows instead of leaving it to be noticed.
+        drift: driftStatus(tw),
         // A database that had to be set aside during start-up is not a silent reset: the page
         // says so above the verdict, the way the GUI says it in its status row.
         history: dbStatus(),

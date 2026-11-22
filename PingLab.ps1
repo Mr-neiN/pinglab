@@ -206,13 +206,16 @@ $tabFixes = New-Tab 'Fixes'
 $tlpFixes = New-Object System.Windows.Forms.TableLayoutPanel
 $tlpFixes.Dock = 'Fill'
 $tlpFixes.ColumnCount = 3
-$tlpFixes.RowCount = 7
+$tlpFixes.RowCount = 8
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 300)))
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 160)))
 for ($i = 0; $i -lt 6; $i++) {
     [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 74)))
 }
+# One row above the settings for the drift sentence: a setting PingLab wrote that Windows has
+# since put back is the one thing the rows themselves cannot show.
+[void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 34)))
 [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 
 $fixTip = New-Object System.Windows.Forms.ToolTip
@@ -282,6 +285,17 @@ $rowOrder = New-FixRow 4 'Wi-Fi auto-connect order' 'netsh wlan show profiles or
 $rowDns = New-FixRow 5 'DNS servers' 'Benchmark the resolvers PingLab knows, or hand the adapter back to your router.' 'Automatic'
 $rowDns.Button.Text = 'Benchmark'
 
+$lblDrift = New-Object System.Windows.Forms.Label
+$lblDrift.Dock = 'Fill'
+$lblDrift.AutoSize = $false
+$lblDrift.AutoEllipsis = $true
+$lblDrift.TextAlign = 'MiddleLeft'
+$lblDrift.ForeColor = [System.Drawing.Color]::FromArgb(165, 105, 0)
+$lblDrift.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+$lblDrift.Margin = New-Object System.Windows.Forms.Padding(0, 6, 8, 0)
+$tlpFixes.Controls.Add($lblDrift, 0, 6)
+$tlpFixes.SetColumnSpan($lblDrift, 3)
+
 $panelRestore = New-Object System.Windows.Forms.Panel
 $panelRestore.Dock = 'Fill'
 $btnPresetSafe = New-Button 'Apply safe preset' 190
@@ -297,7 +311,7 @@ $btnRestore = New-Button 'Restore everything PingLab changed' 300
 $btnRestore.Location = New-Object System.Drawing.Point(416, 12)
 $btnRestore.BackColor = [System.Drawing.Color]::FromArgb(252, 236, 236)
 $panelRestore.Controls.Add($btnRestore)
-$tlpFixes.Controls.Add($panelRestore, 0, 6)
+$tlpFixes.Controls.Add($panelRestore, 0, 7)
 $tlpFixes.SetColumnSpan($panelRestore, 3)
 $tabFixes.Controls.Add($tlpFixes)
 [void]$tabs.TabPages.Add($tabFixes)
@@ -722,6 +736,18 @@ function Update-SoakProgress($st) {
 
 # ------------------------------------------------------------------ commands
 
+function Update-Drift($drift) {
+    if ($null -eq $drift -or -not $drift.count) {
+        $lblDrift.Text = ''
+        $fixTip.SetToolTip($lblDrift, '')
+        return
+    }
+    $lblDrift.Text = [string]$drift.text
+    $details = @($drift.drifted | ForEach-Object { '- ' + $_.setting + ': ' + $_.observation })
+    $fixTip.SetToolTip($lblDrift, ((@([string]$drift.text) + $details) -join "`r`n"))
+    Log ('drift: ' + $drift.text)
+}
+
 function Refresh-State {
     Send-Cmd 'state' @{} {
         param($r)
@@ -752,6 +778,7 @@ function Refresh-State {
         $script:catalog = $r.data.catalog
         Update-Overview $r.data
         Update-Fixes $r.data.tweak
+        Update-Drift $r.data.drift
         if (-not $script:soakRunning) { Update-SoakProgress $r.data.soak }
     }
 }
