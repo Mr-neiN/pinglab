@@ -100,6 +100,9 @@ $sums = foreach ($file in $artifacts) {
     $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $($file.Name)"
 }
-Set-Content -Path (Join-Path $dist "SHA256SUMS.txt") -Value $sums -Encoding ascii
-Write-Host "checksums:    $(Join-Path $dist 'SHA256SUMS.txt')"
+# LF, no BOM: `sha256sum -c` on Linux/macOS reads a trailing CR as part of the filename and
+# reports every published file as missing.
+$sumsPath = Join-Path $dist "SHA256SUMS.txt"
+[System.IO.File]::WriteAllText($sumsPath, (($sums -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding $false))
+Write-Host "checksums:    $sumsPath"
 $artifacts | ForEach-Object { "{0,-38} {1,8:N1} KB" -f $_.Name, ($_.Length / 1KB) }

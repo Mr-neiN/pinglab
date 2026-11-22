@@ -45,6 +45,7 @@ jobs:
         run: |
           node --check pinglab.mjs
           node lib/dns-verdict.test.mjs
+          node lib/audit.test.mjs
 
       - name: Install Inno Setup
         shell: pwsh
