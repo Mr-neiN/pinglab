@@ -446,7 +446,7 @@ function Update-Overview($d) {
             Add-Row 'NIC power management' $(if ($t.nicPower -eq 'unsupported') { 'not available on this adapter' } else { $t.nicDetail })
             Add-Row 'Nagle' $(if ($t.nagleDisabled) { 'disabled (TcpAckFrequency=1, TCPNoDelay=1)' } else { 'on' })
         }
-        Add-Row 'Active changes' ("{0}" -f $d.pending.count)
+        Add-Row 'Active changes' $(if ($null -ne $d.pending.problem) { 'restore points unreadable - see --audit' } else { "{0}" -f $d.pending.count })
         $tuning = if ($null -eq $t.adapterTuning) { 'unreadable' } elseif ($t.adapterTuning.needsFix) { 'stock' } else { 'applied' }
         $orderText = if ($null -eq $t.wifiOrder) { 'n/a' } elseif (-not $t.wifiOrder.readable) { 'unreadable' } elseif ($t.wifiOrder.isFirst) { 'first' } else { '#' + $t.wifiOrder.position }
         Log ("render: adapter={0} wifi={1} {2} ch{3} {4}% plan={5} nic={6} nagle={7} tuning={8} order={9} restorePoints={10}" -f $a.name, $w.ssid, $w.band, $w.channel, $w.signalPct, $t.planPower, $t.nicPower, $t.nagleDisabled, $tuning, $orderText, $d.pending.count)

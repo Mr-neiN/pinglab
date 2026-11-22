@@ -47,6 +47,7 @@ jobs:
           node lib/dns-verdict.test.mjs
           node lib/audit.test.mjs
           node lib/probe-math.test.mjs
+          node lib/backups.test.mjs
 
       - name: Install Inno Setup
         shell: pwsh

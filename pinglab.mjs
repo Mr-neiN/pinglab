@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
-import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText } from "./lib/tweaks.mjs";
+import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
@@ -836,8 +836,17 @@ async function main() {
       ` ${B}why each one reads that way${R}`,
     );
     for (const r of rows) lines.push(`  ${D}·${R} ${r.setting}: ${r.note}`);
-    lines.push("", ` ${B}restore points (${pending.count}) — changes PingLab can undo, not outstanding work${R}`);
-    if (!pending.count) lines.push(`  ${D}none: this machine is at its original values${R}`);
+    const backupProblem = pending.problem || null;
+    lines.push(
+      "",
+      ` ${B}restore points${backupProblem ? "" : ` (${pending.count})`} — changes PingLab can undo, not outstanding work${R}`,
+    );
+    if (backupProblem) {
+      // A count of 0 here would be a claim about the machine, and the file that backs it is
+      // unreadable. Say that instead of printing "at its original values".
+      lines.push(`  ${RED}${backupProblem.message}${R}`);
+      lines.push(`  ${RED}Nothing will be applied or reverted until this is fixed.${R}`);
+    } else if (!pending.count) lines.push(`  ${D}none: this machine is at its original values${R}`);
     for (const it of pending.items || []) {
       lines.push(`  ${D}·${R} ${it.label} (${it.alias}) → ${it.changedTo}`);
       lines.push(`    ${D}restore-all would set: ${it.restoreWillSet}${R}`);
@@ -877,6 +886,10 @@ async function main() {
     const tw = ui.core?.tw;
     if (!tw) problems.push("no active adapter, so no setting could be read");
     const rows = auditRows(tw);
+    // The restore points are the only record of how to undo what this app changed, so an
+    // unreadable file is a problem this check names rather than hides.
+    const backups = backupStatus();
+    if (backups.problem) problems.push(`backups: ${backups.problem.message}`);
     for (const r of rows) {
       if (!r.match) problems.push(`audit: ${r.setting} reports "${r.reported}" but Windows says "${r.observed}"`);
     }
@@ -895,6 +908,9 @@ async function main() {
       `  elevation    every action names its setting and command · ${elevated ? "running elevated, no prompt needed" : `running without admin rights, Windows will ask once per change`}`,
     );
     lines.push(`  audit        ${rows.filter((r) => r.match).length}/${rows.length} settings match what Windows reports`);
+    lines.push(
+      `  backups      ${backups.problem ? "unreadable - nothing will be written until it is repaired" : `${pendingTweaks().count} restore point(s), each saved before the change it undoes`}`,
+    );
     lines.push("");
     if (problems.length) {
       lines.push(`  ${RED}${problems.length} problem(s)${R}`);
@@ -946,6 +962,8 @@ async function main() {
     }
     print([ui.message?.text || "done"]);
     await refreshCore();
+    // A refused or failed change must not look like success to a script that checks $?.
+    if (ui.message?.kind === "bad") process.exitCode = 1;
     const tw = ui.core?.tw || {};
     const order = tw.wifiOrder ? (tw.wifiOrder.isFirst ? "first" : `#${tw.wifiOrder.position}`) : "n/a";
     print([

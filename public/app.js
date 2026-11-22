@@ -580,9 +580,15 @@ function renderFixes() {
 
   const pending = state.pending;
   const badge = $("pendingBadge");
-  if (pending?.count) {
+  if (pending?.problem) {
+    // A count cannot be trusted when the file holding the restore points is unreadable.
+    badge.classList.remove("hidden");
+    badge.textContent = "restore points unreadable";
+    badge.title = pending.problem.message;
+  } else if (pending?.count) {
     badge.classList.remove("hidden");
     badge.textContent = `${pending.count} active`;
+    badge.title = "Changes PingLab can undo";
   } else {
     badge.classList.add("hidden");
   }

@@ -151,7 +151,7 @@ Restore points live in `data/backups.json`; `node pinglab.mjs --audit` prints th
 
 Everything stays inside this folder:
 
-- `data/backups.json` — restore points and the change history. Keep it if you have changes applied.
+- `data/backups.json` — restore points and the change history. Each apply saves its restore point here *before* Windows is touched, and the file is replaced atomically (written to a temporary file, flushed, then renamed), so an interrupted write leaves the previous restore points intact. Keep it if you have changes applied. If it is ever unreadable, PingLab treats its contents as unknown rather than empty: nothing is applied or reverted, the original is never overwritten, a copy is kept as `data/backups.corrupt-<time>.json`, and `--audit`, `--self-check`, the fixes view and the GUI all say so.
 - `data/pinglab.sqlite` — probe, DNS and soak history.
 - `data/bridge-out.*.jsonl`, `data/tmp/` — transient files used by the GUI bridge and elevated calls.
 
