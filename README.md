@@ -11,7 +11,7 @@ It runs entirely on your machine. The only network traffic is the measurements t
 - PowerShell 5.1, which ships with Windows, for the desktop GUI.
 - A wireless adapter if you want the Wi-Fi rows; a machine without one shows those rows as "not applicable" instead of guessing.
 - Location services enabled for your account if you want SSID/signal/channel detail on Windows 11. When Windows hides those fields, the web UI reports that reason and offers to open the Location settings page; elevation does not bypass it.
-- Administrator approval (UAC) for each setting that changes something; a preset asks once per step it actually needs, and every step is a separate undo. Reading state never needs it.
+- Administrator approval (UAC) for each setting that changes something; a preset asks once per step it actually needs, and every step is a separate undo. Reading state never needs it. A standard (non-admin) account works: Windows asks for an administrator's credentials at that point, and the app tells you exactly how to proceed if that prompt is closed — see [Administrator rights](#administrator-rights).
 
 ## Launching it
 
@@ -75,6 +75,28 @@ Risk levels mean:
 - **experimental** — no measurement here has shown a gain and it writes a hardware property. Never part of a preset; only applied by name.
 
 There is exactly one setting I judged doubtful and kept only as an experiment: the Wi-Fi radio power-save row above. It was applied and soaked repeatedly on this machine and produced no measurable latency or jitter gain, so it is not offered as "tuning" and cannot be reached from any preset or bundled button. It stays in the list because it is fully reversible and someone with a specific adapter complaint may still want it — as a named, explicitly experimental choice.
+
+## Administrator rights
+
+Every setting above writes a machine-wide value, so Windows asks for administrator approval each time one is applied or reverted. Reads — the dashboard, `--fixes`, `--audit`, `--self-check`, the DNS benchmark — never need it.
+
+| who | what happens |
+|---|---|
+| signed-in administrator | a consent dialog: click **Yes** |
+| standard account | Windows asks for an administrator account and password (or PIN); approve it and the change runs under that account — nothing to install or configure |
+| already elevated (e.g. *Run as administrator*) | no prompt at all, the action runs directly |
+| prompt closed or refused | **nothing is written**; the setting is re-read and reported unchanged |
+
+When the prompt does not go through, all three surfaces print the same sentence — built once in `lib/tweaks.mjs` (`elevationText`), so the GUI, TUI, web page and CLI cannot describe the same failure differently:
+
+> Nagle's algorithm (per adapter) was not changed - the Windows administrator prompt was closed, so nothing was written. To do it yourself, right-click PingLab.cmd and choose "Run as administrator", or open an elevated PowerShell in the PingLab folder and run: node pinglab.mjs --apply nagle
+
+An action that would change nothing (the setting is already in the requested state, or the adapter does not support it) says so before any prompt appears, so a standard account is never asked for credentials for a no-op.
+
+Two test hooks make these paths checkable without clicking a prompt; neither does anything unless the variable is set:
+
+- `PINGLAB_ELEVATION=cancel` or `refuse` — every elevated call returns as if the prompt had been closed or refused, writing nothing.
+- `PINGLAB_DNS_STUB=quad9` (any id from `lib/dns.mjs`) — the DNS benchmark returns a deterministic run where that resolver clearly wins, so the "write the winner" path can be proven on a network where the real resolvers are within noise.
 
 ## Presets
 

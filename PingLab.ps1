@@ -732,7 +732,7 @@ function Refresh-State {
 }
 
 function Send-Tweak([string]$action, [string]$presetId) {
-    Set-Status 'Waiting for the Windows admin prompt...' 'warn'
+    Set-Status 'Waiting for the Windows administrator prompt - click Yes; nothing changes until you do.' 'warn'
     $tweakArgs = if ($presetId) { @{ preset = $presetId } } else { @{ action = $action } }
     Send-Cmd 'apply' $tweakArgs {
         param($r)
