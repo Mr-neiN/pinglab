@@ -37,11 +37,17 @@ function toast(message, kind = "") {
   toastTimer = setTimeout(() => el.classList.add("hidden"), 5200);
 }
 
+// Written into the page by the server on every load. It is this run's only key to the API,
+// and it is why another site cannot drive the app: it cannot read this page to get it.
+const TOKEN = document.querySelector('meta[name="pinglab-token"]')?.content || "";
+
 async function api(path, body) {
   try {
+    const headers = { "X-PingLab-Token": TOKEN };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
     const res = await fetch(path, {
       method: body === undefined ? "GET" : "POST",
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     return await res.json();

@@ -35,7 +35,7 @@ Three surfaces, one engine (`lib/`) and one dispatch table for every action (`li
 |---|---|---|
 | Desktop GUI | double-click `PingLab.cmd` | PowerShell WinForms; tabs for Overview, Fixes, Wi-Fi, Latency, Soak test. The Fixes tab carries all six settings, including DNS (benchmark, then use the winner, or go back to automatic) |
 | Terminal | `PingLab-TUI.cmd`, or `node pinglab.mjs` | keys shown at the bottom of each view |
-| Web UI | `node server.mjs` (or `npm start`) → <http://127.0.0.1:4747> | bound to loopback only |
+| Web UI | `node server.mjs` (or `npm start`) → <http://127.0.0.1:4747> | loopback only; every response is sent with a strict CSP and the API only answers the page it just served (per-run token, Origin and JSON checks) |
 
 One-shot commands from a terminal:
 

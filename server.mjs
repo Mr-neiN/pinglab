@@ -1,4 +1,5 @@
 import http from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,14 +20,66 @@ const requestedPort = Number(process.env.PORT);
 const PORT =
   Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort < 65536 ? requestedPort : 4747;
 
+/**
+ * One token per server run. index.html is served with it in a <meta> tag, the page sends it
+ * back on every API call, and nothing else knows it: a script on another origin cannot read
+ * this page (no CORS, same-origin policy), so it cannot learn the token. A tab left open
+ * across a restart gets a 403 that says to reload instead of driving a server it no longer
+ * belongs to.
+ */
+const TOKEN = randomBytes(32).toString("base64url");
+const TOKEN_HEADER = "x-pinglab-token";
+
+/** The only names this server answers to. Anything else is DNS rebinding. */
+const HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
+const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, `http://[::1]:${PORT}`]);
+
+/** Headers every response carries, static files and JSON alike. */
+function securityHeaders(contentType) {
+  return {
+    ...(contentType ? { "Content-Type": contentType } : {}),
+    "Cache-Control": "no-store",
+    // The page needs no inline script and loads nothing from another origin. Inline style
+    // attributes are how the bar widths are drawn, so styles alone allow them.
+    "Content-Security-Policy":
+      "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  };
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
+    ...securityHeaders("application/json; charset=utf-8"),
     "Content-Length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function sendText(res, status, text) {
+  res.writeHead(status, securityHeaders("text/plain; charset=utf-8"));
+  res.end(text);
+}
+
+function fail(res, status, error) {
+  sendJson(res, status, { ok: false, error });
+}
+
+/** Constant-time comparison, so the token cannot be guessed a character at a time. */
+function tokenMatches(req) {
+  const given = req.headers[TOKEN_HEADER];
+  if (typeof given !== "string" || given.length !== TOKEN.length) return false;
+  return timingSafeEqual(Buffer.from(given), Buffer.from(TOKEN));
+}
+
+/** A state-changing request has to be JSON, which is what a form post cannot send. */
+function isJson(req) {
+  return String(req.headers["content-type"] || "").toLowerCase().split(";")[0].trim() === "application/json";
 }
 
 async function readJson(req, limit = 2 * 1024 * 1024) {
@@ -53,35 +106,60 @@ const MIME = {
 
 async function serveStatic(res, urlPath) {
   const rel = normalize(urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, ""));
-  if (rel.includes("..")) {
-    res.writeHead(403).end("Forbidden");
-    return;
-  }
+  if (rel.includes("..")) return sendText(res, 403, "Forbidden");
   const file = join(PUBLIC_DIR, rel);
   try {
     const data = await readFile(file);
-    res.writeHead(200, {
-      "Content-Type": MIME[extname(file).toLowerCase()] || "application/octet-stream",
-      "Cache-Control": "no-store",
-    });
+    if (rel === "index.html") {
+      // The page learns the token here and nowhere else; nothing else is injected.
+      const html = data.toString("utf8");
+      const tagged = html.includes("</head>")
+        ? html.replace("</head>", `    <meta name="pinglab-token" content="${TOKEN}" />\n  </head>`)
+        : html;
+      res.writeHead(200, securityHeaders(MIME[".html"]));
+      res.end(tagged);
+      return;
+    }
+    res.writeHead(200, securityHeaders(MIME[extname(file).toLowerCase()] || "application/octet-stream"));
     res.end(data);
   } catch {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
+    sendText(res, 404, "Not found");
   }
 }
 
 const server = http.createServer(async (req, res) => {
+  // A Host that is not one of this machine's loopback names means someone pointed their own
+  // domain at 127.0.0.1 to read the page (and its token) as their own origin. Refuse before
+  // anything is served.
+  if (!HOSTS.has(String(req.headers.host || "").toLowerCase())) {
+    return sendText(res, 421, "Misdirected request: this server only answers 127.0.0.1.");
+  }
+
   const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
   const path = url.pathname;
 
-  if (req.method === "GET" && (path === "/" || path === "/index.html" || path === "/app.js" || path === "/styles.css")) {
-    return serveStatic(res, path);
-  }
-
   if (!path.startsWith("/api/")) {
     if (req.method === "GET") return serveStatic(res, path);
-    res.writeHead(405).end();
-    return;
+    return sendText(res, 405, "Method not allowed");
+  }
+
+  // Every API call has to come from this run's page: it holds the token, a form post from
+  // another site does not, and a same-origin fetch is the only way to present it.
+  if (!tokenMatches(req)) {
+    return fail(res, 403, "This server only answers the PingLab page it just served. Reload the page and try again.");
+  }
+  if (req.method !== "GET" && req.method !== "POST") {
+    return fail(res, 405, "Method not allowed");
+  }
+  if (req.method === "POST") {
+    // Same-origin check first: a browser sends Origin on every POST, so its absence or a
+    // foreign value means the request did not come from the page.
+    if (!ORIGINS.has(String(req.headers.origin || "").toLowerCase())) {
+      return fail(res, 403, "Refused: the request did not come from the PingLab page.");
+    }
+    if (!isJson(req)) {
+      return fail(res, 415, "Refused: this endpoint only accepts application/json request bodies.");
+    }
   }
 
   try {
