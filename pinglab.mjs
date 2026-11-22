@@ -26,6 +26,7 @@ import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mj
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
+import { DATA_DIR } from "./lib/paths.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
 import { saveRun, previousRun, listRuns } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, summarizeRun, listSoakRuns, soakLabel } from "./lib/soak.mjs";
@@ -716,7 +717,7 @@ async function bridge(outPath) {
   // asynchronously from PowerShell 5.1 cannot deliver the callbacks reliably.
   // The file is per process so a second bridge can never truncate one a client is
   // still polling; callers may name it themselves with --out.
-  const outFile = outPath ? resolve(ROOT, outPath) : join(ROOT, "data", `bridge-out.${process.pid}.jsonl`);
+  const outFile = outPath ? resolve(ROOT, outPath) : join(DATA_DIR, `bridge-out.${process.pid}.jsonl`);
   try {
     writeFileSync(outFile, "");
   } catch {}

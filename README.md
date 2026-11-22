@@ -112,6 +112,7 @@ Three test hooks make these paths checkable without clicking a prompt; none of t
 - `PINGLAB_ELEVATION=cancel` or `refuse` — every elevated call returns as if the prompt had been closed or refused, writing nothing.
 - `PINGLAB_PS_STUB=<path to lib/ps-fake.mjs>` (+ `PINGLAB_PS_SCENARIO`, `PINGLAB_PS_LOG`) — replaces every PowerShell call with a fake Windows that answers the real scripts, used by `lib/tweaks.test.mjs` to exercise apply and revert without elevation.
 - `PINGLAB_DNS_STUB=quad9` (any id from `lib/dns.mjs`) — the DNS benchmark returns a deterministic run where that resolver clearly wins, so the "write the winner" path can be proven on a network where the real resolvers are within noise.
+- `PINGLAB_DATA_DIR=<folder>` — where restore points, history and transient files go. The tests point it at a throwaway directory, so a test run never touches the real data folder.
 
 ## Presets
 
@@ -146,15 +147,18 @@ These are never changed automatically, because the right answer depends on your 
 - If a restore does not read back as recorded (for example a profile was deleted in the meantime), the restore point is **kept** and the result says what disagreed, so you can retry rather than losing the original values.
 - **Verified, not assumed.** Every write is read back afterwards (registry values, `powercfg` indices, driver properties, DNS server list, the netsh precedence list). If the read-back disagrees, the change is reported as failed, not as done.
 
-Restore points live in `data/backups.json`; `node pinglab.mjs --audit` prints them under "restore points". A count of 0 means the machine is at its original values.
+Restore points live in `backups.json` inside PingLab's data folder — `%LOCALAPPDATA%\PingLab` for an installed copy, `data\` in a source checkout — and `node pinglab.mjs --audit` prints them under "restore points". A count of 0 means the machine is at its original values.
 
 ## Files it writes
 
-Everything stays inside this folder:
+The program folder is never written to, so an uninstall can remove it completely. Everything PingLab keeps lives in one data folder: `%LOCALAPPDATA%\PingLab` for an installed copy, `data\` beside the code in a source checkout, or wherever `PINGLAB_DATA_DIR` points.
 
-- `data/backups.json` — restore points and the change history. Each apply saves its restore point here *before* Windows is touched, and the file is replaced atomically (written to a temporary file, flushed, then renamed), so an interrupted write leaves the previous restore points intact. Keep it if you have changes applied. If it is ever unreadable, PingLab treats its contents as unknown rather than empty: nothing is applied or reverted, the original is never overwritten, a copy is kept as `data/backups.corrupt-<time>.json`, and `--audit`, `--self-check`, the fixes view and the GUI all say so.
-- `data/pinglab.sqlite` — probe, DNS and soak history.
-- `data/bridge-out.*.jsonl`, `data/tmp/` — transient files used by the GUI bridge and elevated calls.
+- `backups.json` — restore points and the change history. Each apply saves its restore point here *before* Windows is touched, and the file is replaced atomically (written to a temporary file, flushed, then renamed), so an interrupted write leaves the previous restore points intact. Keep it if you have changes applied. If it is ever unreadable, PingLab treats its contents as unknown rather than empty: nothing is applied or reverted, the original is never overwritten, a copy is kept as `backups.corrupt-<time>.json` beside it, and `--audit`, `--self-check`, the fixes view and the GUI all say so.
+- `pinglab.sqlite` — probe, DNS and soak history.
+- `bridge-out.*.jsonl`, `tmp\` — transient files used by the GUI bridge and elevated calls.
+- `gui.log` — the GUI's start-up log.
+
+An upgrade replaces programs only, so all of this survives it. A copy installed before 1.0.3 kept these files in `<install>\data`; the first run copies them into the per-user folder and removes the old ones, so restore points survive the upgrade and the old install folder can be deleted. Uninstalling leaves the data folder in place: it is your record of what the machine looked like, not program files.
 
 Deleting the database resets history; deleting `backups.json` while changes are applied means PingLab can no longer undo them.
 
