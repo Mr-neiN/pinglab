@@ -49,6 +49,7 @@ jobs:
           node lib/probe-math.test.mjs
           node lib/backups.test.mjs
           node lib/server-guards.test.mjs
+          node lib/wifi-band.test.mjs
 
       - name: Install Inno Setup
         shell: pwsh

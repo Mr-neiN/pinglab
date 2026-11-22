@@ -256,15 +256,18 @@ function renderScan() {
   const counts = scan.channels;
   const max = Math.max(1, ...counts.map((c) => c.count));
   const preferred = [36, 40, 44, 48, 149, 153, 157, 161, 165];
-  const busy = new Set(counts.filter((c) => c.count > 0).map((c) => c.channel));
-  const free5 = preferred.filter((ch) => !busy.has(ch)).slice(0, 4);
-  const current = state.connection?.wifi?.channel;
+  // 6 GHz reuses the 5 GHz channel numbers, so only a 5 GHz neighbour makes a 5 GHz channel busy.
+  const busy5 = new Set(counts.filter((c) => c.band === "5 GHz").map((c) => c.channel));
+  const free5 = preferred.filter((ch) => !busy5.has(ch)).slice(0, 4);
+  const wifi = state.connection?.wifi || {};
+  const current = wifi.channel;
+  const mine = counts.find((c) => c.channel === current && (!wifi.band || !c.band || c.band === wifi.band));
 
   box.innerHTML = `
     <div class="channel-grid">
       ${counts
         .map(
-          (c) => `<div class="channel-col" title="${c.count} network(s) on channel ${c.channel}">
+          (c) => `<div class="channel-col" title="${c.count} network(s) on ${c.band ? esc(c.band) + " " : ""}channel ${c.channel}">
             <div class="bar-v" style="height:${clamp((c.count / max) * 60, 4, 60)}px"><i style="height:100%"></i></div>
             <span>${c.channel}</span>
           </div>`,
@@ -276,8 +279,8 @@ function renderScan() {
         ? `Emptiest 5 GHz channels: <b>${free5.join(", ")}</b>.`
         : "Every common 5 GHz channel has at least one neighbour."
     } ${
-      current && busy.has(current)
-        ? `You are on channel ${current}, which is shared with other networks.`
+      mine
+        ? `You are on ${wifi.band ? esc(wifi.band) + " " : ""}channel ${current}, which is shared with other networks.`
         : current
           ? `You are on channel ${current}, which looks clear.`
           : ""

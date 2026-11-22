@@ -413,7 +413,7 @@ function viewWifi(W) {
   const sorted = [...a.nets].sort((x, y) => (x.channel ?? 0) - (y.channel ?? 0));
   for (const n of sorted) {
     const mine = a.mySsid && n.ssid === a.mySsid && n.channel === a.myChannel;
-    const line = `${pad(n.ssid, 24)}${padL(bandOf(n.channel) || "?", 8)}${padL(n.channel ?? "?", 5)}${padL((n.signal ?? "?") + "%", 8)}`;
+    const line = `${pad(n.ssid, 24)}${padL(n.band || bandOf(n.channel) || "?", 8)}${padL(n.channel ?? "?", 5)}${padL((n.signal ?? "?") + "%", 8)}`;
     out.push(`  ${mine ? B + CYN : ""}${line}${mine ? R + " " + D + "← you" + R : ""}`);
   }
   out.push("");
@@ -625,7 +625,7 @@ function textWifi() {
     return;
   }
   print(["", ` ${B}Wi-Fi scan${R}`, ""]);
-  print(a.nets.map((n) => `  ${pad(n.ssid, 24)} ${pad(bandOf(n.channel) || "?", 8)} ch ${padL(n.channel ?? "?", 3)}  ${n.signal ?? "?"}%`));
+  print(a.nets.map((n) => `  ${pad(n.ssid, 24)} ${pad(n.band || bandOf(n.channel) || "?", 8)} ch ${padL(n.channel ?? "?", 3)}  ${n.signal ?? "?"}%`));
   print([""]);
   for (const [kind, text] of wifiAdvice(a, ui.core?.connection?.wifi || {})) print([`  ${text}`]);
   print([""]);
