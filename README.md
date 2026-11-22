@@ -107,9 +107,10 @@ When the prompt does not go through, all three surfaces print the same sentence 
 
 An action that would change nothing (the setting is already in the requested state, or the adapter does not support it) says so before any prompt appears, so a standard account is never asked for credentials for a no-op.
 
-Two test hooks make these paths checkable without clicking a prompt; neither does anything unless the variable is set:
+Three test hooks make these paths checkable without clicking a prompt; none of them does anything unless the variable is set:
 
 - `PINGLAB_ELEVATION=cancel` or `refuse` — every elevated call returns as if the prompt had been closed or refused, writing nothing.
+- `PINGLAB_PS_STUB=<path to lib/ps-fake.mjs>` (+ `PINGLAB_PS_SCENARIO`, `PINGLAB_PS_LOG`) — replaces every PowerShell call with a fake Windows that answers the real scripts, used by `lib/tweaks.test.mjs` to exercise apply and revert without elevation.
 - `PINGLAB_DNS_STUB=quad9` (any id from `lib/dns.mjs`) — the DNS benchmark returns a deterministic run where that resolver clearly wins, so the "write the winner" path can be proven on a network where the real resolvers are within noise.
 
 ## Presets
@@ -160,7 +161,7 @@ Deleting the database resets history; deleting `backups.json` while changes are 
 ## Development
 
 - `lib/catalog.mjs` is the single description of every setting: label, what it changes, what it trades, risk, Windows default, how it is undone, which preset includes it. The TUI, the GUI and the web UI all render from it — add a setting there and each surface picks it up. `validateCatalog()` enforces that every entry has a description, a trade-off, a risk, an undo and `default: "off"`, and that no preset contains an experimental setting.
-- `lib/tweaks.mjs` is the single dispatch table (`runTweakAction`) plus `applyPreset`, which walks a preset through that same table.
+- `lib/tweaks.mjs` is the single dispatch table (`runTweakAction`) plus `applyPreset`, which walks a preset through that same table. `lib/tweaks.test.mjs` drives both against `lib/ps-fake.mjs` (a fake Windows loaded through `PINGLAB_PS_STUB`) and pins applied / already-in-place / unavailable / refused / failed-after-write / reverted, including the restore point each one leaves behind — run it with `node lib/tweaks.test.mjs`.
 - `node pinglab.mjs --self-check` is the check to run after touching any of this: it validates the catalog and presets, compares every catalog action against the dispatch table, reads each setting from Windows, and compares the app's claim with what Windows reports. It exits non-zero on any disagreement, and changes nothing.
 - `node pinglab.mjs --audit` is the same comparison with more detail per row.
 - `lib/dns.mjs` holds the resolver benchmark and the verdict rule; `lib/dns-verdict.test.mjs` drives both verdict branches and the 10% / 70% / tie boundaries with fixed inputs — run it with `node lib/dns-verdict.test.mjs`.
