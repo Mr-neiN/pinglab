@@ -32,9 +32,23 @@ jobs:
       - name: Resolve version from tag
         id: version
         shell: pwsh
+        # The tag is data, never code. A tag named v1.0.0'; Remove-Item ... must not become
+        # part of this script, so it arrives through the environment and is only ever read
+        # from there. It is then rejected unless it is exactly v<major>.<minor>.<patch>,
+        # which is the format the installer's numeric version needs.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_INPUT: ${{ inputs.tag }}
+          TAG_REF: ${{ github.ref_name }}
         run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
-          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:TAG_INPUT } else { $env:TAG_REF }
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "No tag was given. A manual run needs a tag such as v1.0.0."
+          }
+          $tag = $tag.Trim()
+          # \A..\z, not ^..$: .NET's $ also matches before a trailing newline, and an
+          # output line must not be able to smuggle a second line past this check.
+          if ($tag -notmatch '\Av(\d+\.\d+\.\d+)\z') {
             throw "Tag '$tag' must look like v1.2.3 (no suffix), because the installer version is numeric."
           }
           "tag=$tag" >> $env:GITHUB_OUTPUT
@@ -57,7 +71,11 @@ jobs:
 
       - name: Build installer and portable zip
         shell: pwsh
-        run: ./installer/build.ps1 -Version '${{ steps.version.outputs.number }}' -RequireInstaller
+        # Same rule for the resolved number: digits only, and passed as an argument value
+        # rather than pasted into the script text.
+        env:
+          VERSION_NUMBER: ${{ steps.version.outputs.number }}
+        run: ./installer/build.ps1 -Version $env:VERSION_NUMBER -RequireInstaller
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
