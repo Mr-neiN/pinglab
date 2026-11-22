@@ -528,6 +528,10 @@ const TITLES = {
 
 function render() {
   const W = Math.max(64, Math.min(process.stdout.columns || 100, 118));
+  // The frame is drawn to exactly this height. One line more and the terminal scrolls, which
+  // pushes the title - and the damaged-database warning above it - off the top where nobody
+  // sees it. Piped output has no window size, so it keeps the 32 lines it always drew.
+  const H = Math.max(12, process.stdout.rows || 32);
   const lines = [];
   lines.push("");
   const busy = ui.busy ? `  ${YEL}⟳ ${ui.busy}${R}` : "";
@@ -543,13 +547,20 @@ function render() {
     });
   }
   lines.push(` ${D}${TITLES[ui.view] || ""}${R}`);
-  const body = (VIEWS[ui.view] || viewDash)(W);
-  for (const entry of body) {
-    for (const l of String(entry).split("\n")) {
-      lines.push(l.includes("\x1b") || l === "" ? l : ` ${D}${l}${R}`);
-    }
+  const body = (VIEWS[ui.view] || viewDash)(W).flatMap((entry) => String(entry).split("\n"));
+  // A view taller than the window is clipped instead of being allowed to scroll the frame,
+  // and the line that says how much is missing is part of the frame, so nothing can hide the
+  // warning by making a view long.
+  const room = H - 2 - lines.length;
+  const shown = body.length > room ? body.slice(0, Math.max(0, room - 1)) : body;
+  for (const l of shown) {
+    lines.push(l.includes("\x1b") || l === "" ? l : ` ${D}${l}${R}`);
   }
-  while (lines.length < (process.stdout.rows ? process.stdout.rows - 2 : 30)) lines.push("");
+  if (body.length > shown.length && room >= 2) {
+    const dropped = body.length - shown.length;
+    lines.push(` ${YEL}… ${dropped} more line${dropped === 1 ? "" : "s"} than this ${H}-row window holds${R}`);
+  }
+  while (lines.length < H - 2) lines.push("");
   lines.push(` ${D}${"─".repeat(W - 2)}${R}`);
   lines.push(` ${footer(ui.view)}`);
   process.stdout.write("\x1b[H" + lines.map((l) => l + "\x1b[K").join("\n") + "\x1b[J");
@@ -773,6 +784,7 @@ async function main() {
       "",
       "  node pinglab.mjs               interactive dashboard",
       "  node pinglab.mjs --once        render the dashboard once",
+      "  node pinglab.mjs --view NAME   draw one dashboard view once: dash, fixes, probe, wifi, dns, soak, history",
       "  node pinglab.mjs --wifi        Wi-Fi channel & band diagnosis",
       "  node pinglab.mjs --probe       latency to game endpoints",
       "  node pinglab.mjs --dns         DNS resolver benchmark",
@@ -1033,6 +1045,23 @@ async function main() {
     print(["", ...soakTable(summary), ""]);
     return;
   }
+  // One view of the dashboard, drawn once: the same frame the keys draw, so what a support
+  // report or a test sees is what the interactive session shows. Handled before the
+  // "stdin is not a terminal" fallback, which only ever draws the overview.
+  if (has("--view")) {
+    const name = String(after("--view") || "");
+    if (!VIEWS[name]) {
+      print([`Unknown view "${name}". Known views: ${Object.keys(VIEWS).join(", ")}.`]);
+      process.exitCode = 2;
+      return;
+    }
+    ui.view = name;
+    process.stdout.write("\x1b[H\x1b[2J");
+    render();
+    process.stdout.write("\n");
+    return;
+  }
+
   if (has("--once") || !process.stdin.isTTY) {
     process.stdout.write("\x1b[H\x1b[2J");
     render();

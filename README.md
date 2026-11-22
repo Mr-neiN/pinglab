@@ -41,6 +41,7 @@ One-shot commands from a terminal:
 
 ```
 node pinglab.mjs --once        render the dashboard once
+node pinglab.mjs --view NAME   draw one dashboard view once (dash, fixes, probe, wifi, dns, soak, history)
 node pinglab.mjs --fixes       list the reversible settings, their risk and their state
 node pinglab.mjs --presets     the named presets and exactly what each applies
 node pinglab.mjs --preset X    X = safe | latency (applies that preset)
