@@ -133,7 +133,7 @@ const server = http.createServer(async (req, res) => {
       const result = await bufferbloat({ host: body.host || "1.1.1.1", seconds: Number(body.seconds) || 6 });
       const id = saveRun(
         "bufferbloat",
-        `grade ${result.grade} (${result.deltaMs ?? "?"} ms added under load)`,
+        `grade ${result.grade} (${result.deltaMs ?? "?"} ms added under load${result.loaded?.loss > 0 ? `, ${result.loaded.loss}% of pings lost` : ""})`,
         result,
       );
       return sendJson(res, 200, { ok: result.ok, runId: id, result, previous: previousRun("bufferbloat") });

@@ -345,7 +345,14 @@ function renderBloat() {
     return;
   }
   if (b.grade === undefined || b.grade === "n/a") {
-    box.innerHTML = `<p class="empty">Could not measure — no latency samples came back under load.</p>`;
+    // A blocked test download and a line that drops every ping are different problems, and
+    // the loss figure is what tells them apart.
+    const why =
+      b.error ||
+      (Number(b.loaded?.loss) >= 100
+        ? "every ping sent while the line was busy failed (100% loss), so there is no loaded latency to compare against idle."
+        : "no latency samples came back under load.");
+    box.innerHTML = `<p class="empty">${b.error ? esc(why) : `Could not measure — ${esc(why)}`}</p>`;
     return;
   }
   const meaning = {
@@ -355,13 +362,23 @@ function renderBloat() {
     D: "Poor. Downloads and streams will visibly spike your ping.",
     F: "Bad. Your ping explodes under any load — the most common cause of 'random' lag.",
   }[b.grade];
+  // A busy line that drops packets is worse than one that only adds latency, so the loss
+  // is shown next to the added ping instead of being left out of a successful-looking result.
+  const underLoadLoss = Number(b.loaded?.loss) || 0;
+  const idleLoss = Number(b.idle?.loss) || 0;
+  let lossNote = "";
+  if (underLoadLoss > 0) {
+    lossNote = `<br /><span class="bad">${num(underLoadLoss)}% of the pings under load were lost (${b.loaded?.received ?? 0} of ${b.loaded?.sent ?? 0} came back)</span>`;
+  } else if (idleLoss > 0) {
+    lossNote = `<br /><span class="bad">${num(idleLoss)}% of the idle pings were lost</span>`;
+  }
   box.innerHTML = `
     <div class="grade grade-${b.grade.toLowerCase()}">${b.grade}</div>
     <div>
       <div class="bloat-facts">
         idle <b>${num(b.idle?.avg)} ms</b> → under load <b>${num(b.loaded?.avg)} ms</b><br />
         <span class="${b.grade <= "C" ? "ok" : "bad"}">${b.deltaMs >= 0 ? "+" : ""}${num(b.deltaMs, 0)} ms added</span>
-        · ${num(b.downloadMbps, 1)} Mbps pulled
+        · ${num(b.downloadMbps, 1)} Mbps pulled${lossNote}
       </div>
       <p class="meta" style="margin:8px 0 0">${meaning}</p>
     </div>`;
@@ -662,6 +679,13 @@ async function runBloat() {
   const r = await api("/api/bufferbloat", { seconds: 6 });
   busy(btn, false);
   if (!r.ok && !r.result?.ok) {
+    // Even a failed test carries figures worth showing: how many pings were lost under
+    // load, or why the download never loaded the line. renderBloat explains both.
+    if (r.result) {
+      state.bloat = r.result;
+      renderBloat();
+      return;
+    }
     $("bloatBox").innerHTML = `<p class="empty">${esc(r.error || "Test did not complete.")}</p>`;
     toast(r.error || "Bufferbloat test did not complete", "bad");
     return;
