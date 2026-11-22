@@ -23,12 +23,13 @@ import { fileURLToPath } from "node:url";
 import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
-import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions } from "./lib/tweaks.mjs";
+import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText } from "./lib/tweaks.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
 import { saveRun, previousRun, listRuns } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, summarizeRun, listSoakRuns, soakLabel } from "./lib/soak.mjs";
+import { isElevated } from "./lib/ps.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 try {
@@ -855,6 +856,24 @@ async function main() {
         if (!actions.has(a)) problems.push(`${t.id}: action "${a}" is not in runTweakAction`);
       }
     }
+    // Every action has to be able to explain a refused prompt the same way everywhere, and
+    // the command it names has to be the one that actually exists on the CLI.
+    for (const t of TWEAKS) {
+      for (const [mode, a] of [
+        ["apply", t.actions.apply],
+        ["revert", t.actions.revert],
+      ]) {
+        const spec = actionSpec(a);
+        const cmd = elevationCommand(spec);
+        const sentence = elevationText(spec, { cancelled: true });
+        if (spec.id !== t.id) problems.push(`${t.cli}: action ${a} maps to ${spec.id} instead of ${t.id}`);
+        if (cmd !== `node pinglab.mjs --${mode} ${t.cli}`) problems.push(`${t.cli}: elevation command reads "${cmd}"`);
+        if (!sentence.includes(t.label) || !sentence.includes(cmd)) {
+          problems.push(`${t.cli}: the elevation sentence does not name the setting and its command`);
+        }
+      }
+    }
+    const elevated = await isElevated();
     const tw = ui.core?.tw;
     if (!tw) problems.push("no active adapter, so no setting could be read");
     const rows = auditRows(tw);
@@ -872,6 +891,9 @@ async function main() {
     lines.push(`  defaults     all off until applied: ${TWEAKS.filter((t) => t.default === "off").length}/${TWEAKS.length}`);
     lines.push(`  presets      ${PRESETS.map((p) => `${p.id} (${p.tweaks.length})`).join(", ")} · none experimental`);
     lines.push(`  dispatch     ${actions.size} actions, every catalog action present`);
+    lines.push(
+      `  elevation    every action names its setting and command · ${elevated ? "running elevated, no prompt needed" : `running without admin rights, Windows will ask once per change`}`,
+    );
     lines.push(`  audit        ${rows.filter((r) => r.match).length}/${rows.length} settings match what Windows reports`);
     lines.push("");
     if (problems.length) {

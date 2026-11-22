@@ -4,6 +4,20 @@ A local Windows network doctor for gaming: it measures latency, jitter, loss, bu
 
 It runs entirely on your machine. The only network traffic is the measurements themselves (your endpoint pings, DNS lookups, bufferbloat transfer). There is no telemetry, no account and no cloud.
 
+## Installing it
+
+Grab the newest release from <https://github.com/Mr-neiN/pinglab/releases>:
+
+| file | what it is |
+|---|---|
+| `PingLab-Setup-<version>.exe` | per-user installer (no administrator rights needed to install) |
+| `PingLab-<version>-portable.zip` | the same app, unzip and run `PingLab.cmd` |
+| `SHA256SUMS.txt` | SHA-256 of both files |
+
+The installer puts the app in `%LOCALAPPDATA%\Programs\PingLab`, adds **PingLab** and **PingLab terminal** to the Start menu (and optionally a desktop shortcut), and registers an uninstaller under *Settings → Apps*. It checks for Node.js 22+ before copying anything: if `node` is missing or too old it stops, says so, and offers to open the Node.js download page. Uninstalling removes the program and its shortcuts but leaves `data\` in the install folder, because that is where your restore points live — delete that folder yourself once no setting is left applied.
+
+Installing never asks for elevation. Changing a setting still does — see [Administrator rights](#administrator-rights).
+
 ## Requirements
 
 - Windows 10 or 11.
@@ -150,6 +164,8 @@ Deleting the database resets history; deleting `backups.json` while changes are 
 - `node pinglab.mjs --self-check` is the check to run after touching any of this: it validates the catalog and presets, compares every catalog action against the dispatch table, reads each setting from Windows, and compares the app's claim with what Windows reports. It exits non-zero on any disagreement, and changes nothing.
 - `node pinglab.mjs --audit` is the same comparison with more detail per row.
 - `lib/dns.mjs` holds the resolver benchmark and the verdict rule; `lib/dns-verdict.test.mjs` drives both verdict branches and the 10% / 70% / tie boundaries with fixed inputs — run it with `node lib/dns-verdict.test.mjs`.
+- `installer/build.ps1` builds the release artifacts into `dist/`: the portable zip, the Inno Setup installer (`installer/pinglab.iss`, per-user, Node checked in `[Code]`) and `SHA256SUMS.txt`. It picks the version from `package.json` unless you pass `-Version`. The icon comes from `installer/make-icon.ps1` and is committed, so a normal build does not redraw it.
+- `.github/workflows/release.yml` builds and attaches those files to a GitHub release for every tag shaped like `v1.2.3`, or on demand for an existing tag. The tag's version is passed to `build.ps1`, so the installer, the zip and the release all carry the same number.
 
 ## Limits
 

@@ -1,0 +1,67 @@
+name: Release installer
+
+# Every tag that looks like v1.2.3 gets a release with:
+#   PingLab-Setup-1.2.3.exe        per-user installer (no admin needed to install)
+#   PingLab-1.2.3-portable.zip     the same app without an install step
+#   SHA256SUMS.txt                 hashes for both
+#
+# A manual run re-builds a release for a tag that already exists.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, for example v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)$') {
+            throw "Tag '$tag' must look like v1.2.3 (no suffix), because the installer version is numeric."
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "number=$($Matches[1])" >> $env:GITHUB_OUTPUT
+
+      - name: Check the app still parses
+        shell: pwsh
+        run: |
+          node --check pinglab.mjs
+          node lib/dns-verdict.test.mjs
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: ./installer/build.ps1 -Version '${{ steps.version.outputs.number }}' -RequireInstaller
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: PingLab ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/PingLab-Setup-*.exe
+            dist/PingLab-*-portable.zip
+            dist/SHA256SUMS.txt
