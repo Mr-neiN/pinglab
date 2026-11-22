@@ -22,6 +22,9 @@
     </header>
 
     <main>
+      <!-- Filled from /api/state when the history database had to be set aside at start-up. -->
+      <section id="historyNotice" class="hintbox dbnotice hidden" role="status"></section>
+
       <section id="verdict" class="verdict">
         <span class="verdict-label">Verdict</span>
         <p id="verdictText">No measurement yet. Run the test to see what is actually limiting your connection.</p>

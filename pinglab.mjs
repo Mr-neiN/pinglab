@@ -648,6 +648,10 @@ async function bridgeCommand(cmd, args = {}) {
         connection: ui.core?.connection || null,
         tweak: ui.core?.tw || null,
         pending: ui.core?.pending || null,
+        // Reported once per run, like /api/state does for the page: the GUI's status row is
+        // the only place a user who just starts the app would otherwise never hear about a
+        // database that had to be set aside.
+        history: dbStatus(),
         runs: ui.core?.runs || [],
         soaks: ui.core?.soaks || [],
         soak: soakStatus(),

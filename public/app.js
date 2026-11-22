@@ -4,6 +4,7 @@ const state = {
   connection: null,
   tweak: null,
   pending: null,
+  history: null,
   endpoints: [],
   catalog: null,
   probe: null,
@@ -628,6 +629,23 @@ function renderFixes() {
   renderPresets();
 }
 
+/**
+ * A database that had to be set aside at start-up is not a silent reset. The server reports
+ * it once per run in /api/state, and it belongs above the verdict rather than in a log.
+ */
+function renderHistoryNotice() {
+  const el = $("historyNotice");
+  const problem = state.history?.problem;
+  if (!problem) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  el.textContent = problem.message;
+  el.title = problem.message;
+  el.classList.remove("hidden");
+}
+
 function renderHistory(runs) {
   const list = $("historyList");
   if (!runs || !runs.length) {
@@ -654,6 +672,7 @@ async function loadState() {
   state.connection = s.connection;
   state.tweak = s.tweakState;
   state.pending = s.pending;
+  state.history = s.history || null;
   state.endpoints = s.endpoints || [];
   state.catalog = s.catalog || null;
   state.alias = s.connection.activeRoute?.alias || null;
@@ -661,6 +680,7 @@ async function loadState() {
   renderConnection();
   renderFixes();
   renderEndpoints();
+  renderHistoryNotice();
   renderHistory(s.recentRuns);
   updateVerdict();
 }

@@ -10,7 +10,7 @@ import { snapshot, wifiScan, dnsServers, routes } from "./lib/net.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset } from "./lib/tweaks.mjs";
 import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
-import { saveRun, listRuns, saveTweak, listTweaks, previousRun } from "./lib/db.mjs";
+import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, listSoakRuns, getSoakRun, compareSoaks, soakLabel } from "./lib/soak.mjs";
 import { openTarget } from "./lib/ps.mjs";
 
@@ -175,6 +175,9 @@ const server = http.createServer(async (req, res) => {
         connection,
         tweakState: tw,
         pending: tweaks,
+        // A database that had to be set aside during start-up is not a silent reset: the page
+        // says so above the verdict, the way the GUI says it in its status row.
+        history: dbStatus(),
         endpoints: config.endpoints,
         resolvers: RESOLVERS,
         recentRuns: listRuns(null, 12),

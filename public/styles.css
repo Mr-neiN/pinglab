@@ -210,6 +210,9 @@ main { padding: 22px 28px 48px; max-width: 1320px; margin: 0 auto; }
   display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
 }
 
+/* A database that had to be set aside at start-up belongs above the fold, not only in a log. */
+.dbnotice { margin: 0 0 18px; border-left: 3px solid var(--warn); line-height: 1.45; }
+
 .scan { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 .channel-grid { display: flex; gap: 6px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
 .channel-col { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 10.5px; color: var(--muted); }

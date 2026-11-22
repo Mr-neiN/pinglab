@@ -729,9 +729,25 @@ function Refresh-State {
         Log 'state received'
         # The first successful read replaces the startup placeholder, so the status bar does
         # not keep saying "Reading system state..." while the window is already populated.
+        # A database that had to be set aside when the engine started is not a silent reset:
+        # it takes the place of "Ready." in the status row, and the full sentence (the copy's
+        # path included) rides along as the label's tooltip. Only on start-up, so a later
+        # action's own result is never overwritten by it.
         if ($script:startupPending) {
             $script:startupPending = $false
-            Set-Status 'Ready.' 'good'
+            $dbState = $r.data.history
+            if ($null -ne $dbState -and $null -ne $dbState.problem) {
+                Log ('history problem: ' + $dbState.problem.message)
+                $lblStatus.ToolTipText = [string]$dbState.problem.message
+                $copyLeaf = if ($null -ne $dbState.problem.copy) { [System.IO.Path]::GetFileName([string]$dbState.problem.copy) } else { $null }
+                if ($copyLeaf) {
+                    Set-Status ("History database was damaged - set aside as $copyLeaf, so this run starts with an empty history.") 'warn'
+                } else {
+                    Set-Status ([string]$dbState.problem.message) 'warn'
+                }
+            } else {
+                Set-Status 'Ready.' 'good'
+            }
         }
         $script:catalog = $r.data.catalog
         Update-Overview $r.data
