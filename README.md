@@ -158,7 +158,7 @@ The program folder is never written to, so an uninstall can remove it completely
 - `bridge-out.*.jsonl`, `tmp\` — transient files used by the GUI bridge and elevated calls.
 - `gui.log` — the GUI's start-up log.
 
-An upgrade replaces programs only, so all of this survives it. A copy installed before 1.0.3 kept these files in `<install>\data`; the first run copies them into the per-user folder and removes the old ones, so restore points survive the upgrade and the old install folder can be deleted. Uninstalling leaves the data folder in place: it is your record of what the machine looked like, not program files.
+An upgrade replaces programs only, so all of this survives it. A copy installed before 1.0.3 kept these files in `<install>\data`; the first run copies the restore points and the database into the per-user folder, deletes the transient files that folder had accumulated, and then removes the folder itself — so restore points survive the upgrade, nothing is left stranded in the install folder, and an uninstall can remove that folder completely. Uninstalling leaves the data folder in place: it is your record of what the machine looked like, not program files.
 
 Deleting the database resets history; deleting `backups.json` while changes are applied means PingLab can no longer undo them.
 
