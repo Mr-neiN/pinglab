@@ -62,6 +62,7 @@ jobs:
           node lib/audit.test.mjs
           node lib/probe-math.test.mjs
           node lib/backups.test.mjs
+          node lib/db.test.mjs
           node lib/server-guards.test.mjs
           node lib/wifi-band.test.mjs
           node lib/paths.test.mjs

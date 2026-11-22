@@ -28,7 +28,7 @@ import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCa
 import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
 import { DATA_DIR } from "./lib/paths.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
-import { saveRun, previousRun, listRuns } from "./lib/db.mjs";
+import { saveRun, previousRun, listRuns, dbStatus } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, summarizeRun, listSoakRuns, soakLabel } from "./lib/soak.mjs";
 import { isElevated } from "./lib/ps.mjs";
 
@@ -852,6 +852,12 @@ async function main() {
       lines.push(`  ${D}·${R} ${it.label} (${it.alias}) → ${it.changedTo}`);
       lines.push(`    ${D}restore-all would set: ${it.restoreWillSet}${R}`);
     }
+    // History is not a restore point, but a database that had to be set aside this run is
+    // still something the user needs to hear about, not a silent reset.
+    const history = dbStatus();
+    if (history.problem) {
+      lines.push("", ` ${B}history${R}`, `  ${RED}${history.problem.message}${R}`);
+    }
     lines.push("");
     print(lines);
     return;
@@ -891,6 +897,10 @@ async function main() {
     // unreadable file is a problem this check names rather than hides.
     const backups = backupStatus();
     if (backups.problem) problems.push(`backups: ${backups.problem.message}`);
+    // The database holds measurements, not the way to undo a change, so a damaged one is
+    // reported and recovered from rather than fatal - see lib/db.mjs.
+    const history = dbStatus();
+    if (history.problem) problems.push(`history: ${history.problem.message}`);
     for (const r of rows) {
       if (!r.match) problems.push(`audit: ${r.setting} reports "${r.reported}" but Windows says "${r.observed}"`);
     }
@@ -911,6 +921,9 @@ async function main() {
     lines.push(`  audit        ${rows.filter((r) => r.match).length}/${rows.length} settings match what Windows reports`);
     lines.push(
       `  backups      ${backups.problem ? "unreadable - nothing will be written until it is repaired" : `${pendingTweaks().count} restore point(s), each saved before the change it undoes`}`,
+    );
+    lines.push(
+      `  history      ${history.problem ? "damaged - set aside and started again, so this run's history begins empty" : "readable, so runs and soak tests are recorded"}`,
     );
     lines.push("");
     if (problems.length) {
