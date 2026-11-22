@@ -533,6 +533,15 @@ function render() {
   const busy = ui.busy ? `  ${YEL}⟳ ${ui.busy}${R}` : "";
   lines.push(` ${B}${CYN}PingLab${R} ${D}· network doctor${R}${busy}`);
   lines.push(` ${D}${"─".repeat(W - 2)}${R}`);
+  // A database that had to be set aside is not a silent reset. The dashboard is a normal way
+  // to start PingLab, so the warning stays at the top of every view for the whole run, in the
+  // same sentence --audit, --self-check, the GUI and the page use.
+  const history = dbStatus();
+  if (history.problem) {
+    wrapText(history.problem.message, W - 6).forEach((l, i) => {
+      lines.push(` ${i === 0 ? `${YEL}!${R}` : " "} ${YEL}${l}${R}`);
+    });
+  }
   lines.push(` ${D}${TITLES[ui.view] || ""}${R}`);
   const body = (VIEWS[ui.view] || viewDash)(W);
   for (const entry of body) {
