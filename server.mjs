@@ -11,6 +11,7 @@ import { analyseWifi, wifiAdvice, scanWifi } from "./lib/wifi.mjs";
 import { dnsWinner, dnsVerdict, bloatVerdict, transportText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
+import { createStateCache } from "./lib/state-cache.mjs";
 import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
 import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus } from "./lib/db.mjs";
@@ -32,6 +33,19 @@ const PUBLIC_DIR = join(ROOT, "public");
 const requestedPort = Number(process.env.PORT);
 const PORT =
   Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort < 65536 ? requestedPort : 4747;
+
+/**
+ * How long a state read may be reused. Reads are driven by PowerShell and cost seconds; the
+ * settings they describe change only when someone acts. Five seconds is short enough that an
+ * outside change is echoed on the next refresh, and long enough that a page's own re-reads do
+ * not each launch seven processes. After that the old value is still served once while a
+ * background read refreshes it; only beyond the stale limit does a request wait for a read.
+ */
+const requestedTtl = Number(process.env.PINGLAB_STATE_TTL_MS);
+const STATE_TTL_MS = Number.isFinite(requestedTtl) && requestedTtl >= 0 ? requestedTtl : 5000;
+const requestedMaxStale = Number(process.env.PINGLAB_STATE_MAX_STALE_MS);
+const STATE_MAX_STALE_MS =
+  Number.isFinite(requestedMaxStale) && requestedMaxStale >= STATE_TTL_MS ? requestedMaxStale : 120000;
 
 /**
  * One token per server run. index.html is served with it in a <meta> tag, the page sends it
@@ -160,6 +174,44 @@ async function serveStatic(res, urlPath) {
   }
 }
 
+/**
+ * Everything GET /api/state answers with, assembled once. The cache owns when it is called;
+ * keeping the assembly here means the route and any test see the same shape.
+ */
+async function buildState() {
+  const config = await loadConfig();
+  const connection = await snapshot();
+  const alias = connection.activeRoute?.alias || null;
+  const [tw, tweaks] = await Promise.all([
+    alias ? tweakState(alias, { dns: connection.dns }) : Promise.resolve(null),
+    Promise.resolve(pendingTweaks()),
+  ]);
+  return {
+    connection,
+    tweakState: tw,
+    pending: tweaks,
+    // A change PingLab made that Windows has since put back travels with the state, so the
+    // page can say it above the rows instead of leaving it to be noticed.
+    drift: driftStatus(tw),
+    // A database that had to be set aside during start-up is not a silent reset: the page
+    // says so above the verdict, the way the GUI says it in its status row.
+    history: dbStatus(),
+    endpoints: config.endpoints,
+    resolvers: RESOLVERS,
+    recentRuns: listRuns(null, 12),
+    // Same catalog the TUI and the GUI render, so labels, trade-offs, risk levels and
+    // preset contents cannot differ between surfaces.
+    catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
+  };
+}
+
+const stateCache = createStateCache({
+  load: buildState,
+  ttlMs: STATE_TTL_MS,
+  maxStaleMs: STATE_MAX_STALE_MS,
+  onError: (err) => console.error("[pinglab] state refresh failed:", redact(err?.message || err)),
+});
+
 const server = http.createServer(async (req, res) => {
   // A Host that is not one of this machine's loopback names means someone pointed their own
   // domain at 127.0.0.1 to read the page (and its token) as their own origin. Refuse before
@@ -197,30 +249,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && path === "/api/state") {
-      const config = await loadConfig();
-      const connection = await snapshot();
-      const alias = connection.activeRoute?.alias || null;
-      const [tw, tweaks] = await Promise.all([
-        alias ? tweakState(alias, { dns: connection.dns }) : Promise.resolve(null),
-        Promise.resolve(pendingTweaks()),
-      ]);
-      return sendJson(res, 200, {
-        connection,
-        tweakState: tw,
-        pending: tweaks,
-        // A change PingLab made that Windows has since put back travels with the state, so the
-        // page can say it above the rows instead of leaving it to be noticed.
-        drift: driftStatus(tw),
-        // A database that had to be set aside during start-up is not a silent reset: the page
-        // says so above the verdict, the way the GUI says it in its status row.
-        history: dbStatus(),
-        endpoints: config.endpoints,
-        resolvers: RESOLVERS,
-        recentRuns: listRuns(null, 12),
-        // Same catalog the TUI and the GUI render, so labels, trade-offs, risk levels and
-        // preset contents cannot differ between surfaces.
-        catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
-      });
+      return sendJson(res, 200, await stateCache.get());
     }
 
     if (req.method === "POST" && path === "/api/probe") {
@@ -244,6 +273,8 @@ const server = http.createServer(async (req, res) => {
         ...probe,
         summary,
       });
+      // recentRuns travels with the state, so a new run makes the cached copy incomplete.
+      stateCache.invalidate();
       return sendJson(res, 200, {
         ok: true,
         runId: id,
@@ -267,6 +298,7 @@ const server = http.createServer(async (req, res) => {
           ? `grade ${measured.overallGrade} (down ${measured.download?.grade ?? "n/a"}, up ${measured.upload?.grade ?? "n/a"})`
           : `${measured.download ? "download" : "upload"} grade ${measured.overallGrade}`;
       const id = saveRun("bufferbloat", label, result);
+      stateCache.invalidate();
       return sendJson(res, 200, { ok: result.ok, runId: id, result, previous: previousRun("bufferbloat") });
     }
 
@@ -277,6 +309,7 @@ const server = http.createServer(async (req, res) => {
       const result = { ...measured, verdict: dnsVerdict(measured), winner: dnsWinner(measured) };
       const current = (await dnsServers()).find((d) => d.servers?.length) || null;
       const id = saveRun("dns", result.bestLabel ? `fastest ${result.bestLabel}` : "no clear winner", result);
+      stateCache.invalidate();
       return sendJson(res, 200, { ok: true, runId: id, result, current });
     }
 
@@ -285,6 +318,8 @@ const server = http.createServer(async (req, res) => {
       const endpoints = endpointList(body.endpoints);
       const config = await loadConfig();
       await saveConfig({ ...config, endpoints });
+      // The endpoint list is part of the state the page renders.
+      stateCache.invalidate();
       return sendJson(res, 200, { ok: true, endpoints });
     }
 
@@ -324,6 +359,10 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { ok: false, error: "That setting could not be started." });
       }
       if (result.ok) saveTweak(action, { alias, servers, preset, data: result.data ?? null });
+      // Every attempt can have recorded a restore point or partially changed a setting, and a
+      // successful one has changed the very rows the cached state reports. Drop it before the
+      // response, so the page's next state read cannot be served the pre-click answer.
+      stateCache.invalidate();
       const tw = await tweakState(alias);
       // "This adapter cannot do that" and a closed UAC prompt are expected outcomes, not
       // server errors; only a real failure is a 500.
@@ -351,11 +390,14 @@ const server = http.createServer(async (req, res) => {
       const tw = alias ? await tweakState(alias) : null;
       const label = soakLabel(tw);
       const started = await startSoak({ seconds, intervalMs, label });
+      stateCache.invalidate();
       return sendJson(res, 200, { ok: true, ...started });
     }
 
     if (req.method === "POST" && path === "/api/soak/stop") {
-      return sendJson(res, 200, { ok: true, ...stopSoak() });
+      const stopped = stopSoak();
+      stateCache.invalidate();
+      return sendJson(res, 200, { ok: true, ...stopped });
     }
 
     if (req.method === "GET" && path === "/api/soak/status") {
