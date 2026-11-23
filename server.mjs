@@ -201,7 +201,7 @@ const server = http.createServer(async (req, res) => {
       const connection = await snapshot();
       const alias = connection.activeRoute?.alias || null;
       const [tw, tweaks] = await Promise.all([
-        alias ? tweakState(alias) : Promise.resolve(null),
+        alias ? tweakState(alias, { dns: connection.dns }) : Promise.resolve(null),
         Promise.resolve(pendingTweaks()),
       ]);
       return sendJson(res, 200, {
