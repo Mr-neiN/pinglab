@@ -1,19 +1,29 @@
 import http from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join, extname, normalize } from "node:path";
+import { join, extname, normalize, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
 import { snapshot, wifiScan, dnsServers, routes } from "./lib/net.mjs";
-import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset } from "./lib/tweaks.mjs";
+import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
 import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, listSoakRuns, getSoakRun, compareSoaks, soakLabel } from "./lib/soak.mjs";
 import { openTarget } from "./lib/ps.mjs";
+import {
+  HttpError,
+  refuse,
+  bodyObject,
+  bufferbloatRequest,
+  endpointList,
+  soakRequest,
+  tweakRequest,
+  pathId,
+} from "./lib/api-input.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(ROOT, "public");
@@ -34,6 +44,11 @@ const TOKEN_HEADER = "x-pinglab-token";
 /** The only names this server answers to. Anything else is DNS rebinding. */
 const HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, `http://[::1]:${PORT}`]);
+
+/** Never let the run's token reach a log line, even inside an error message. */
+function redact(value) {
+  return String(value).split(TOKEN).join("[token]");
+}
 
 /** Headers every response carries, static files and JSON alike. */
 function securityHeaders(contentType) {
@@ -83,16 +98,27 @@ function isJson(req) {
   return String(req.headers["content-type"] || "").toLowerCase().split(";")[0].trim() === "application/json";
 }
 
-async function readJson(req, limit = 2 * 1024 * 1024) {
+/**
+ * Read a JSON object, or refuse it. Every failure here is the caller's, so it carries a
+ * status and a fixed sentence: a parser message quotes the input it could not read, and an
+ * error body is the last place a request's contents should appear.
+ */
+async function readJson(req, { limit = 2 * 1024 * 1024 } = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > limit) throw new Error("Request body too large");
+    if (size > limit) throw new HttpError(413, "The request body is larger than 2 MB.");
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new HttpError(400, "The request body is not valid JSON.");
+  }
+  return bodyObject(parsed);
 }
 
 const MIME = {
@@ -107,8 +133,12 @@ const MIME = {
 
 async function serveStatic(res, urlPath) {
   const rel = normalize(urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, ""));
-  if (rel.includes("..")) return sendText(res, 403, "Forbidden");
+  if (rel.includes("..") || isAbsolute(rel)) return sendText(res, 403, "Forbidden");
   const file = join(PUBLIC_DIR, rel);
+  // The joined path must still sit under public/. The check above refuses dot segments; this
+  // refuses anything the platform might interpret differently (a drive, a UNC share).
+  const back = relative(PUBLIC_DIR, file);
+  if (back.startsWith("..") || isAbsolute(back)) return sendText(res, 403, "Forbidden");
   try {
     const data = await readFile(file);
     if (rel === "index.html") {
@@ -193,11 +223,19 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && path === "/api/probe") {
       const body = await readJson(req);
+      if (body.endpointIds !== undefined && !Array.isArray(body.endpointIds)) {
+        throw refuse("endpointIds must be a list of endpoint ids.");
+      }
+      if (Array.isArray(body.endpointIds) && body.endpointIds.length > 25) {
+        throw refuse("Too many endpointIds (the limit is 25).");
+      }
       const config = await loadConfig();
-      const selected =
-        Array.isArray(body.endpointIds) && body.endpointIds.length
-          ? config.endpoints.filter((e) => body.endpointIds.includes(e.id))
-          : config.endpoints;
+      const wanted = Array.isArray(body.endpointIds)
+        ? body.endpointIds.filter((id) => typeof id === "string")
+        : [];
+      const selected = wanted.length
+        ? config.endpoints.filter((e) => wanted.includes(e.id))
+        : config.endpoints;
       const probe = await runProbe(selected);
       const summary = summarizeProbe(probe);
       const id = saveRun("probe", `avg ${summary.gameAvgMs ?? "?"} ms, loss ${summary.gameLoss ?? "?"}%`, {
@@ -214,8 +252,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && path === "/api/bufferbloat") {
-      const body = await readJson(req);
-      const result = await bufferbloat({ host: body.host || "1.1.1.1", seconds: Number(body.seconds) || 6 });
+      const body = bufferbloatRequest(await readJson(req));
+      const result = await bufferbloat({ host: body.host, seconds: body.seconds });
       const id = saveRun(
         "bufferbloat",
         `grade ${result.grade} (${result.deltaMs ?? "?"} ms added under load${result.loaded?.loss > 0 ? `, ${result.loaded.loss}% of pings lost` : ""})`,
@@ -233,16 +271,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && path === "/api/endpoints") {
       const body = await readJson(req);
-      const endpoints = (body.endpoints || [])
-        .filter((e) => e && typeof e.host === "string" && e.host.trim())
-        .map((e, i) => ({
-          id: String(e.id || `ep${i}`).replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || `ep${i}`,
-          label: String(e.label || e.host).slice(0, 60),
-          host: String(e.host).trim().slice(0, 200),
-          port: Math.min(65535, Math.max(1, Number(e.port) || 443)),
-          kind: e.kind === "dns" ? "dns" : "game",
-        }));
-      if (!endpoints.length) return sendJson(res, 400, { ok: false, error: "At least one endpoint is required" });
+      const endpoints = endpointList(body.endpoints);
       const config = await loadConfig();
       await saveConfig({ ...config, endpoints });
       return sendJson(res, 200, { ok: true, endpoints });
@@ -254,25 +283,25 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && path === "/api/tweak") {
-      const body = await readJson(req);
-      const action = body.action;
-      const alias = body.alias;
-      if (!alias) return sendJson(res, 400, { ok: false, error: "No network adapter selected" });
+      const { action, alias, preset, servers } = tweakRequest(await readJson(req));
+      if (action === "apply-preset") {
+        if (!preset || !presetById(preset)) throw refuse("preset must be one of PingLab's presets.");
+      } else if (!knownActions().has(action)) {
+        throw refuse("action is not one of PingLab's settings.");
+      }
 
       let result;
       try {
-        if (action === "apply-preset") {
-          if (!presetById(body.preset)) {
-            return sendJson(res, 400, { ok: false, error: `Unknown preset: ${body.preset ?? "(none)"}` });
-          }
-          result = await applyPreset(alias, String(body.preset));
-        } else {
-          result = await runTweakAction(alias, action, { servers: body.servers });
-        }
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: String(err?.message || err) });
+        result =
+          action === "apply-preset"
+            ? await applyPreset(alias, preset)
+            : await runTweakAction(alias, action, { servers: servers ?? undefined });
+      } catch {
+        // runTweakAction reports its own outcomes; a throw here is not something the page
+        // can act on, and its text is ours, not the caller's.
+        return sendJson(res, 400, { ok: false, error: "That setting could not be started." });
       }
-      if (result.ok) saveTweak(action, { alias, servers: body.servers, preset: body.preset, data: result.data ?? null });
+      if (result.ok) saveTweak(action, { alias, servers, preset, data: result.data ?? null });
       const tw = await tweakState(alias);
       // "This adapter cannot do that" and a closed UAC prompt are expected outcomes, not
       // server errors; only a real failure is a 500.
@@ -293,17 +322,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && path === "/api/soak/start") {
-      const body = await readJson(req);
-      const minutes = Number(body.minutes);
+      const { seconds, intervalMs } = soakRequest(await readJson(req));
+      if (soakStatus().running) return sendJson(res, 409, { ok: false, error: "A soak test is already running." });
       // Record which settings were live, so a later comparison cannot be misread.
       const alias = (await routes())[0]?.alias || null;
       const tw = alias ? await tweakState(alias) : null;
       const label = soakLabel(tw);
-      const started = await startSoak({
-        seconds: Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : Number(body.seconds) || 600,
-        intervalMs: Number(body.intervalMs) || 500,
-        label,
-      });
+      const started = await startSoak({ seconds, intervalMs, label });
       return sendJson(res, 200, { ok: true, ...started });
     }
 
@@ -321,16 +346,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && path.startsWith("/api/soak/run/")) {
-      const id = Number(path.split("/").pop());
+      const id = pathId(path, "/api/soak/run/");
+      if (id === null) return sendJson(res, 404, { ok: false, error: "No such soak run" });
       const run = getSoakRun(id);
       if (!run) return sendJson(res, 404, { ok: false, error: "No such soak run" });
       return sendJson(res, 200, { ok: true, run });
     }
 
     if (req.method === "GET" && path === "/api/soak/compare") {
-      const a = Number(url.searchParams.get("a"));
-      const b = Number(url.searchParams.get("b"));
-      const cmp = compareSoaks(a, b);
+      const a = url.searchParams.get("a") || "";
+      const b = url.searchParams.get("b") || "";
+      if (!/^\d{1,12}$/.test(a) || !/^\d{1,12}$/.test(b)) {
+        return sendJson(res, 400, { ok: false, error: "Comparing soaks needs two run ids." });
+      }
+      const cmp = compareSoaks(Number(a), Number(b));
       if (!cmp) return sendJson(res, 404, { ok: false, error: "Both soak runs need a stored summary" });
       return sendJson(res, 200, { ok: true, ...cmp });
     }
@@ -346,10 +375,36 @@ const server = http.createServer(async (req, res) => {
 
     return sendJson(res, 404, { ok: false, error: "Unknown endpoint" });
   } catch (err) {
-    console.error("[pinglab]", err);
-    return sendJson(res, 500, { ok: false, error: String(err?.message || err) });
+    // A refusal names the field it rejected and is safe to show. Anything else is ours: the
+    // log gets it (with the token redacted), the page gets a sentence without internals.
+    if (err instanceof HttpError) return fail(res, err.status, err.message);
+    console.error("[pinglab]", redact(err?.stack || err));
+    return fail(
+      res,
+      500,
+      "PingLab hit an internal error while handling that request. The terminal running PingLab has the details.",
+    );
   }
 });
+
+/**
+ * Requests Node's parser rejects never reach the handler above, and Node's default 400
+ * carries none of this app's headers. Answer them the same way, without echoing the request.
+ */
+server.on("clientError", (err, socket) => {
+  if (err?.code === "ECONNRESET" || !socket.writable) return socket.destroy();
+  const body = JSON.stringify({ ok: false, error: "Bad request" });
+  const lines = Object.entries({
+    ...securityHeaders("application/json; charset=utf-8"),
+    "Content-Length": Buffer.byteLength(body),
+    Connection: "close",
+  }).map(([name, value]) => `${name}: ${value}`);
+  socket.end(`HTTP/1.1 400 Bad Request\r\n${lines.join("\r\n")}\r\n\r\n${body}`);
+});
+
+// A small JSON body may not hold a connection open indefinitely.
+server.headersTimeout = 15000;
+server.requestTimeout = 30000;
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`PingLab running at http://127.0.0.1:${PORT}`);
