@@ -318,3 +318,12 @@ main { padding: 22px 28px 48px; max-width: 1320px; margin: 0 auto; }
 }
 .preset-list li { padding: 1px 0; }
 .preset .btn { align-self: flex-start; margin-top: 4px; }
+
+/* Wi-Fi advice, generated once in lib/wifi.mjs so the page, the terminal and the GUI
+   cannot describe the same scan differently. Colour is a hint; the sentence carries it. */
+.advice { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
+.advice li { margin: 4px 0; color: #444; }
+.advice li.good { color: #0a7a3d; }
+.advice li.warn { color: #a56900; }
+.advice li.bad { color: #b21e1e; }
+.advice li.dim { color: #7a7a7a; }

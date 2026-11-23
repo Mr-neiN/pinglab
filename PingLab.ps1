@@ -353,9 +353,10 @@ $tabLatency = New-Tab 'Latency'
 $tlpLatency = New-Object System.Windows.Forms.TableLayoutPanel
 $tlpLatency.Dock = 'Fill'
 $tlpLatency.ColumnCount = 1
-$tlpLatency.RowCount = 3
+$tlpLatency.RowCount = 4
 [void]$tlpLatency.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 40)))
 [void]$tlpLatency.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$tlpLatency.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 30)))
 [void]$tlpLatency.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 30)))
 
 $panelLatencyTop = New-Object System.Windows.Forms.Panel
@@ -363,6 +364,9 @@ $panelLatencyTop.Dock = 'Fill'
 $btnProbe = New-Button 'Run latency test' 160
 $btnProbe.Location = New-Object System.Drawing.Point(0, 4)
 $panelLatencyTop.Controls.Add($btnProbe)
+$btnBloat = New-Button 'Run bufferbloat test' 180
+$btnBloat.Location = New-Object System.Drawing.Point(170, 4)
+$panelLatencyTop.Controls.Add($btnBloat)
 $tlpLatency.Controls.Add($panelLatencyTop, 0, 0)
 
 $lvProbe = New-Grid @('Endpoint', 'avg ms', 'p95 ms', 'jitter ms', 'loss %') @(300, 100, 100, 100, 90)
@@ -373,6 +377,12 @@ $lblProbeSummary.Dock = 'Fill'
 $lblProbeSummary.TextAlign = 'MiddleLeft'
 $lblProbeSummary.Text = ''
 $tlpLatency.Controls.Add($lblProbeSummary, 0, 2)
+
+$lblBloat = New-Object System.Windows.Forms.Label
+$lblBloat.Dock = 'Fill'
+$lblBloat.TextAlign = 'MiddleLeft'
+$lblBloat.Text = ''
+$tlpLatency.Controls.Add($lblBloat, 0, 3)
 $tabLatency.Controls.Add($tlpLatency)
 [void]$tabs.TabPages.Add($tabLatency)
 
@@ -689,6 +699,25 @@ function Update-Probe($p) {
     $rowsText = @($p.results | ForEach-Object { '{0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }) -join ' || '
     Log ("probe grid: {0} rows | {1}" -f $lvProbe.Items.Count, $rowsText)
     $lblProbeSummary.Text = ("game avg {0} ms | jitter {1} ms | loss {2}% | {3}/{4} reachable" -f (N $p.summary.gameAvgMs), (N $p.summary.gameJitter), (N $p.summary.gameLoss), $p.summary.reachable, $p.summary.endpoints)
+    if ($null -ne $p.summary.transport) {
+        $t = $p.summary.transport
+        if ($t.icmpAnswered -eq 0) { Log 'ICMP echo blocked; TCP figures stand alone' }
+        elseif ($null -ne $t.gapMs -and [math]::Abs($t.gapMs) -ge 15) { Log ("TCP {0} ms vs ICMP {1} ms" -f $t.tcpMs, $t.icmpMs) }
+    }
+}
+
+function Update-Bloat($b) {
+    if ($null -eq $b) { $lblBloat.Text = ''; return }
+    $parts = @()
+    foreach ($pair in @(@('download', $b.download), @('upload', $b.upload))) {
+        $name = $pair[0]
+        $p = $pair[1]
+        if ($null -eq $p) { continue }
+        if ($p.grade -eq 'n/a') { $parts += ("{0} not measured" -f $name) }
+        else { $parts += ("{0} grade {1} ({2} ms added, {3} Mbps)" -f $name, $p.grade, (N $p.deltaMs), (N $p.mbps)) }
+    }
+    $lblBloat.Text = ('Bufferbloat: ' + ($parts -join ' | '))
+    Log ('bufferbloat: ' + $lblBloat.Text)
 }
 
 function Update-SoakSummary($sum) {
@@ -896,6 +925,20 @@ $btnProbe.Add_Click({
         if (-not $r.ok) { Set-Status ('Latency test failed: ' + $r.error) 'bad'; return }
         Update-Probe $r.data.probe
         Set-Status ("Latency test done - game avg {0} ms." -f (N $r.data.probe.summary.gameAvgMs)) 'good'
+    }
+})
+
+$btnBloat.Add_Click({
+    Set-Status 'Loading the line with downloads, then uploads - about 15 seconds...' 'info'
+    $btnBloat.Enabled = $false
+    Send-Cmd 'bloat' @{ seconds = 6 } {
+        param($r)
+        $btnBloat.Enabled = $true
+        if (-not $r.ok) { Set-Status ('Bufferbloat test failed: ' + $r.error) 'bad'; return }
+        Update-Bloat $r.data.bloat
+        if ($r.data.bloat.overallGrade -eq 'n/a') { Set-Status ('Bufferbloat not measurable: ' + $r.data.verdict) 'warn' }
+        else { Set-Status ("Bufferbloat done - worst direction grade {0}." -f $r.data.bloat.overallGrade) 'good' }
+        Refresh-State
     }
 })
 

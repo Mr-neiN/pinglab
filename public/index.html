@@ -33,7 +33,7 @@
       <div class="grid">
         <section class="card card-wide">
           <header class="card-head">
-            <h2>Latency &amp; loss <span class="hint">TCP handshake RTT — what a game actually does</span></h2>
+            <h2>Latency &amp; loss <span class="hint">TCP handshake RTT, with an ICMP cross-check</span></h2>
             <button id="runProbe" class="btn">Test latency</button>
           </header>
           <div id="probeMeta" class="meta">Idle.</div>
@@ -67,11 +67,11 @@
 
         <section class="card">
           <header class="card-head">
-            <h2>Bufferbloat <span class="hint">ping under load</span></h2>
+            <h2>Bufferbloat <span class="hint">ping under download and upload load</span></h2>
             <button id="runBloat" class="btn">Run test</button>
           </header>
           <div id="bloatBox" class="bloat">
-            <p class="empty">Not tested. This downloads for ~7 s to load your line, so skip it on metered data.</p>
+            <p class="empty">Not tested. This downloads and then uploads for about 15 s to load your line, so skip it on metered data.</p>
           </div>
         </section>
 
@@ -91,7 +91,7 @@
 
         <section class="card card-wide">
           <header class="card-head">
-            <h2>DNS benchmark <span class="hint">cold resolution of 10 game domains</span></h2>
+            <h2>DNS benchmark <span class="hint">cold resolution of 10 game domains; only a resolver that answers every lookup can win</span></h2>
             <button id="runDns" class="btn">Benchmark DNS</button>
           </header>
           <div id="dnsBox"><p class="empty">Not tested. Fast DNS fixes slow store pages and sign-ins, not your in-game ping.</p></div>

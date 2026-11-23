@@ -9,6 +9,7 @@
  *   node pinglab.mjs --once     render the dashboard once and exit
  *   node pinglab.mjs --wifi     Wi-Fi channel/band diagnosis, plain text
  *   node pinglab.mjs --probe    latency test against the game endpoints
+ *   node pinglab.mjs --bloat    bufferbloat test, download and upload
  *   node pinglab.mjs --dns      DNS resolver benchmark
  *   node pinglab.mjs --soak 10  10-minute soak, printed live, stored in the database
  *   node pinglab.mjs --fixes    list the reversible fixes and their state
@@ -21,8 +22,9 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { snapshot, dnsServers } from "./lib/net.mjs";
-import { runProbe as probeOnce, summarizeProbe } from "./lib/probe.mjs";
+import { runProbe as probeOnce, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
+import { bloatVerdict, transportText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
@@ -92,6 +94,7 @@ const ui = {
   core: null,
   coreAt: 0,
   probe: null,
+  bloat: null,
   dns: null,
   scan: null,
   soak: null,
@@ -214,7 +217,25 @@ async function runDns() {
   saveRun("dns", result.bestLabel ? `fastest ${result.bestLabel}` : "no clear winner", result);
   ui.dns = { result, current, at: Date.now() };
   ui.busy = null;
-  say(`Fastest resolver: ${result.bestLabel ?? "unknown"}.`, "good");
+  say(`Fastest resolver: ${result.bestLabel ?? "unknown"}.`, result.bestLabel ? "good" : "warn");
+}
+
+/**
+ * Bufferbloat in both directions. The terminal used to have no way to run this test at
+ * all, so "ping under load" existed only in the web UI; the same engine call now feeds
+ * the terminal, the GUI and the page.
+ */
+async function runBloat() {
+  ui.busy = "loading the line (download, then upload)…";
+  ui.view = "probe";
+  const result = await bufferbloat({ seconds: 6, direction: "both" });
+  saveRun("bufferbloat", `grade ${result.overallGrade} (down ${result.download?.grade ?? "n/a"}, up ${result.upload?.grade ?? "n/a"})`, result);
+  ui.bloat = { result, at: Date.now() };
+  ui.busy = null;
+  say(
+    result.overallGrade === "n/a" ? "Bufferbloat could not be measured." : `Bufferbloat: worst direction grade ${result.overallGrade}.`,
+    result.overallGrade === "n/a" ? "warn" : "good",
+  );
 }
 
 async function soakStart(minutes = 10) {
@@ -393,9 +414,28 @@ function viewFixes(W) {
   return out;
 }
 
+/** The bufferbloat block, shown even when no latency probe has been run. */
+function bloatLines(W) {
+  const b = ui.bloat?.result;
+  if (!b) return [];
+  const out = ["", `  ${B}Bufferbloat${R} ${D}ping while the line is busy${R}`];
+  for (const [name, phase] of [
+    ["download", b.download],
+    ["upload", b.upload],
+  ]) {
+    if (!phase) continue;
+    out.push(
+      `  ${pad(name, 10)}${phase.grade === "n/a" ? `${YEL}n/a${R}` : `${colour(phase.deltaMs, 29, 99)}grade ${phase.grade}${R}`} ${D}${n0(phase.deltaMs)} ms added · ${n1(phase.mbps)} Mbps${R}`,
+    );
+  }
+  const note = bloatVerdict(b);
+  if (note) for (const line of wrapText(note, W - 4)) out.push(`  ${D}${line}${R}`);
+  return out;
+}
+
 function viewProbe(W) {
   const p = ui.probe;
-  if (!p) return ["", ` ${D}no probe yet — press p${R}`];
+  if (!p) return ["", ` ${D}no probe yet — press p${R}`, ...bloatLines(W)];
   const out = [""];
   const cols = [22, 8, 8, 8, 8, 7];
   out.push(`  ${D}${pad("endpoint", cols[0])}${padL("avg", cols[1])}${padL("p95", cols[2])}${padL("jitter", cols[3])}${padL("loss", cols[4])}${padL("sent", cols[5])}${R}`);
@@ -409,8 +449,13 @@ function viewProbe(W) {
   out.push(`  ${D}game avg${R} ${B}${n1(p.summary.gameAvgMs)} ms${R}   ${D}jitter${R} ${n1(p.summary.gameJitter)} ms   ${D}loss${R} ${n1(p.summary.gameLoss)}%   ${D}reachable${R} ${p.summary.reachable}/${p.summary.endpoints}`);
   if (p.icmp?.length) {
     out.push("");
-    out.push(`  ${D}ICMP cross-check: ${p.icmp.map((i) => `${i.host} ${i.loss}% loss`).join(" · ")}${R}`);
+    out.push(
+      `  ${D}ICMP echo: ${p.icmp.map((i) => `${i.host} avg ${n1(i.avg)} ms · jitter ${n1(i.jitter)} ms · ${n0(i.loss)}% loss`).join(" · ")}${R}`,
+    );
+    const note = transportText(p.summary.transport);
+    if (note) for (const line of wrapText(note, W - 4)) out.push(`  ${D}${line}${R}`);
   }
+  out.push(...bloatLines(W));
   if (p.previous) out.push(`  ${D}previous run: ${p.previous.summary}${R}`);
   return out;
 }
@@ -432,7 +477,7 @@ function viewWifi(W) {
     out.push(`  ${mine ? B + CYN : ""}${line}${mine ? R + " " + D + "← you" + R : ""}`);
   }
   out.push("");
-  for (const [kind, text] of wifiAdvice(a, wifi)) {
+  for (const [kind, text] of wifiAdvice(a, wifi, s.scan)) {
     const c = kind === "good" ? GRN : kind === "warn" ? YEL : kind === "bad" ? RED : kind === "dim" ? D : CYN;
     out.push(`  ${c}${text}${R}`);
   }
@@ -524,7 +569,7 @@ function footer(view) {
     const c = ui.message.kind === "good" ? GRN : ui.message.kind === "bad" ? RED : ui.message.kind === "warn" ? YEL : CYN;
     return `${c}${ui.message.text}${R}`;
   }
-  const nav = "p probe · w wi-fi · d dns · t soak · f fixes · h history · r refresh · ? help · q quit";
+  const nav = "p probe · b bloat · w wi-fi · d dns · t soak · f fixes · h history · r refresh · ? help · q quit";
   const back = view === "dash" ? "" : "esc back · ";
   return `${D}${back}${nav}${R}`;
 }
@@ -592,10 +637,12 @@ async function handleKey(ch) {
   switch (ch) {
     case "?":
       ui.view = "history";
-      say("Keys: p probe, w wifi, d dns, t soak, f fixes, h history, r refresh, q quit", "info", 12000);
+      say("Keys: p probe, b bufferbloat, w wifi, d dns, t soak, f fixes, h history, r refresh, q quit", "info", 12000);
       return;
     case "p":
       return runProbe();
+    case "b":
+      return runBloat();
     case "w":
       return runScan();
     case "d":
@@ -662,7 +709,7 @@ function textWifi() {
   print(["", ` ${B}Wi-Fi scan${R}`, ""]);
   print(a.nets.map((n) => `  ${pad(n.ssid, 24)} ${pad(n.band || bandOf(n.channel) || "?", 8)} ch ${padL(n.channel ?? "?", 3)}  ${n.signal ?? "?"}%`));
   print([""]);
-  for (const [kind, text] of wifiAdvice(a, ui.core?.connection?.wifi || {})) print([`  ${text}`]);
+  for (const [kind, text] of wifiAdvice(a, ui.core?.connection?.wifi || {}, scanData.scan)) print([`  ${text}`]);
   print([""]);
 }
 
@@ -698,13 +745,26 @@ async function bridgeCommand(cmd, args = {}) {
     case "probe":
       await runProbe();
       return { probe: ui.probe, message: ui.message?.text || null };
+    case "bloat": {
+      ui.busy = "loading the line (download, then upload)…";
+      const result = await bufferbloat({
+        seconds: args.seconds ? Number(args.seconds) : 6,
+        direction: args.direction || "both",
+      });
+      saveRun("bufferbloat", `grade ${result.overallGrade} (down ${result.download?.grade ?? "n/a"}, up ${result.upload?.grade ?? "n/a"})`, result);
+      ui.bloat = { result, at: Date.now() };
+      ui.busy = null;
+      return { bloat: result, verdict: bloatVerdict(result) };
+    }
     case "wifi": {
       // The diagnosis reads ui.core.connection.wifi; without core state it would report
       // "not reporting Wi-Fi details" no matter what the adapter is doing.
       if (!ui.core) await refreshCore();
       await runScan();
       const scan = ui.scan?.scan || null;
-      const advice = scan?.ok ? wifiAdvice(analyseWifi(scan, ui.core?.connection?.wifi || {}), ui.core?.connection?.wifi || {}) : [];
+      const advice = scan?.ok
+        ? wifiAdvice(analyseWifi(scan, ui.core?.connection?.wifi || {}), ui.core?.connection?.wifi || {}, scan)
+        : [];
       return { scan, advice, message: ui.message?.text || null };
     }
     case "dns":
@@ -802,6 +862,7 @@ async function main() {
       "  node pinglab.mjs --view NAME   draw one dashboard view once: dash, fixes, probe, wifi, dns, soak, history",
       "  node pinglab.mjs --wifi        Wi-Fi channel & band diagnosis",
       "  node pinglab.mjs --probe       latency to game endpoints",
+      "  node pinglab.mjs --bloat       bufferbloat, download and upload",
       "  node pinglab.mjs --dns         DNS resolver benchmark",
       "  node pinglab.mjs --soak [min]  soak test (default 10 min)",
       "  node pinglab.mjs --fixes       show reversible fixes",
@@ -1058,6 +1119,11 @@ async function main() {
   }
   if (has("--probe")) {
     await runProbe();
+    print(["", ...viewProbe(100).filter((l) => vis(l).trim())]);
+    return;
+  }
+  if (has("--bloat")) {
+    await runBloat();
     print(["", ...viewProbe(100).filter((l) => vis(l).trim())]);
     return;
   }

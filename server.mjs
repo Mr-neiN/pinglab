@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
-import { snapshot, wifiScan, dnsServers, routes } from "./lib/net.mjs";
+import { snapshot, wifi, dnsServers, routes } from "./lib/net.mjs";
+import { analyseWifi, wifiAdvice, scanWifi } from "./lib/wifi.mjs";
+import { dnsWinner, dnsVerdict, bloatVerdict, transportText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
@@ -247,25 +249,34 @@ const server = http.createServer(async (req, res) => {
         runId: id,
         ...probe,
         summary,
+        // The TCP-versus-ICMP sentence is computed once, from the summary every surface
+        // already receives, rather than assembled again on the page.
+        transport: transportText(summary.transport),
         previous: previousRun("probe"),
       });
     }
 
     if (req.method === "POST" && path === "/api/bufferbloat") {
       const body = bufferbloatRequest(await readJson(req));
-      const result = await bufferbloat({ host: body.host, seconds: body.seconds });
-      const id = saveRun(
-        "bufferbloat",
-        `grade ${result.grade} (${result.deltaMs ?? "?"} ms added under load${result.loaded?.loss > 0 ? `, ${result.loaded.loss}% of pings lost` : ""})`,
-        result,
-      );
+      const measured = await bufferbloat({ host: body.host, seconds: body.seconds, direction: body.direction });
+      // The verdict and both direction grades travel with the result, so the page, the
+      // terminal and the GUI print the same sentence from the same measured object.
+      const result = { ...measured, verdict: bloatVerdict(measured) };
+      const label =
+        measured.mode === "both" || measured.mode === "duplex"
+          ? `grade ${measured.overallGrade} (down ${measured.download?.grade ?? "n/a"}, up ${measured.upload?.grade ?? "n/a"})`
+          : `${measured.download ? "download" : "upload"} grade ${measured.overallGrade}`;
+      const id = saveRun("bufferbloat", label, result);
       return sendJson(res, 200, { ok: result.ok, runId: id, result, previous: previousRun("bufferbloat") });
     }
 
     if (req.method === "POST" && path === "/api/dns-bench") {
-      const result = await dnsBenchmark();
+      const measured = await dnsBenchmark();
+      // One verdict, one winner selector, shared with the terminal and the GUI, so the page
+      // cannot offer a resolver the rule refused (or hide one it accepted).
+      const result = { ...measured, verdict: dnsVerdict(measured), winner: dnsWinner(measured) };
       const current = (await dnsServers()).find((d) => d.servers?.length) || null;
-      const id = saveRun("dns", `fastest ${result.bestLabel ?? "unknown"}`, result);
+      const id = saveRun("dns", result.bestLabel ? `fastest ${result.bestLabel}` : "no clear winner", result);
       return sendJson(res, 200, { ok: true, runId: id, result, current });
     }
 
@@ -278,8 +289,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && path === "/api/wifi-scan") {
-      const scan = await wifiScan();
-      return sendJson(res, 200, { ok: scan.ok, scan });
+      // The same refresh path the terminal and the GUI use: a cached scan holding one
+      // network is not a survey, and the page must not present it as one.
+      const scan = await scanWifi();
+      let advice = [];
+      if (scan?.ok) {
+        try {
+          const link = await wifi();
+          advice = wifiAdvice(analyseWifi(scan, link || {}), link || {}, scan);
+        } catch {
+          advice = [];
+        }
+      }
+      return sendJson(res, 200, { ok: scan.ok, scan, advice });
     }
 
     if (req.method === "POST" && path === "/api/tweak") {

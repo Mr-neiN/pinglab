@@ -83,16 +83,25 @@ function collectIssues() {
       issues.push({ sev: 2, text: `Average ${num(s.gameAvgMs, 0)} ms to game services is high for EU. That is distance and ISP routing, not something on your PC.` });
   }
   const b = state.bloat;
-  if (b && b.grade) {
-    if (b.grade === "D" || b.grade === "F")
-      issues.push({ sev: 3, text: `Bufferbloat grade ${b.grade}: ping rises by ${num(b.deltaMs, 0)} ms as soon as the line is busy. Anyone streaming or downloading will spike your game.` });
-    else if (b.grade === "C" || b.grade === "B")
-      issues.push({ sev: 1, text: `Under load your ping rises ${num(b.deltaMs, 0)} ms (grade ${b.grade}). Not fatal, but it explains the odd spike.` });
+  if (b) {
+    // The worst direction is the one that matters: a good download grade must never hide a
+    // failing upload grade, which is what a household uploading a clip actually feels.
+    const graded = [b.download, b.upload]
+      .filter((p) => p && p.grade && p.grade !== "n/a")
+      .sort((x, y) => "ABCDF".indexOf(y.grade) - "ABCDF".indexOf(x.grade));
+    const worst = graded[0];
+    const grade = b.overallGrade || b.grade;
+    const delta = num(worst?.deltaMs ?? b.deltaMs, 0);
+    const activity = worst?.direction === "upload" ? "uploading or streaming out" : "downloading or streaming";
+    if (grade === "D" || grade === "F")
+      issues.push({ sev: 3, text: `Bufferbloat grade ${grade}: ping rises by ${delta} ms while ${activity}. Anyone else using the line will spike your game.` });
+    else if (grade === "C" || grade === "B")
+      issues.push({ sev: 1, text: `Under load your ping rises ${delta} ms (grade ${grade}). Not fatal, but it explains the odd spike.` });
   }
   const w = state.connection?.wifi;
   if (w?.connected) {
     if (typeof w.signalPct === "number" && w.signalPct < 55)
-      issues.push({ sev: 2, text: `Wi-Fi signal is only ${w.signalPct}%. Weak signal is the most common cause of lag spikes — move closer or run a cable.` });
+      issues.push({ sev: 2, text: `Wi-Fi signal quality is only ${w.signalPct}%. It is a coarse Windows percentage, but weak radio is the most common cause of lag spikes — move closer or run a cable.` });
     if (w.band === "2.4 GHz")
       issues.push({ sev: 1, text: `You are on the crowded 2.4 GHz band (channel ${w.channel ?? "?"}). Switch to 5 GHz for lower latency and less interference.` });
   }
@@ -100,8 +109,8 @@ function collectIssues() {
   if (d?.result?.best && d.result.resolvers?.length) {
     const best = d.result.resolvers.find((r) => r.id === d.result.best);
     const current = (state.connection?.dnsForActive?.servers || []).join(",");
-    if (best && !current.includes(best.servers[0]) && best.avg !== null && best.avg < 40) {
-      issues.push({ sev: 1, text: `${best.label} resolves faster than your current DNS (${num(best.avg, 0)} ms average). That helps store pages and sign-ins, not in-game ping.` });
+    if (best && !current.includes(best.servers[0]) && best.median !== null && best.median < 40) {
+      issues.push({ sev: 1, text: `${best.label} resolves faster than your current DNS (${num(best.median, 0)} ms median, every lookup answered). That helps store pages and sign-ins, not in-game ping.` });
     }
   }
   return issues.sort((a, b) => b.sev - a.sev);
@@ -259,12 +268,18 @@ function renderScan() {
   const preferred = [36, 40, 44, 48, 149, 153, 157, 161, 165];
   // 6 GHz reuses the 5 GHz channel numbers, so only a 5 GHz neighbour makes a 5 GHz channel busy.
   const busy5 = new Set(counts.filter((c) => c.band === "5 GHz").map((c) => c.channel));
-  const free5 = preferred.filter((ch) => !busy5.has(ch)).slice(0, 4);
+  // A cached scan is not a survey, so it cannot support "this channel is empty" advice.
+  const free5 = scan.stale ? [] : preferred.filter((ch) => !busy5.has(ch)).slice(0, 4);
   const wifi = state.connection?.wifi || {};
   const current = wifi.channel;
   const mine = counts.find((c) => c.channel === current && (!wifi.band || !c.band || c.band === wifi.band));
+  const stale = scan.stale
+    ? `<p class="meta"><span class="warn">Cached scan:</span> Windows returned ${scan.networks.length} network(s) from its cache, so these counts are not a survey. Run the scan again with the Wi-Fi panel open.</p>`
+    : "";
+  const advice = (state.wifiAdvice || []).map(([kind, text]) => `<li class="${esc(kind)}">${esc(text)}</li>`).join("");
 
   box.innerHTML = `
+    ${stale}
     <div class="channel-grid">
       ${counts
         .map(
@@ -277,15 +292,18 @@ function renderScan() {
     </div>
     <p class="meta">${scan.networks.length} networks visible. ${
       free5.length
-        ? `Emptiest 5 GHz channels: <b>${free5.join(", ")}</b>.`
-        : "Every common 5 GHz channel has at least one neighbour."
+        ? `Emptiest visible 5 GHz channels: <b>${free5.join(", ")}</b>.`
+        : scan.stale
+          ? ""
+          : "Every common 5 GHz channel has at least one neighbour in this scan."
     } ${
       mine
-        ? `You are on ${wifi.band ? esc(wifi.band) + " " : ""}channel ${current}, which is shared with other networks.`
+        ? `You are on ${wifi.band ? esc(wifi.band) + " " : ""}channel ${current}, which is shared with other visible networks.`
         : current
-          ? `You are on channel ${current}, which looks clear.`
+          ? `No other visible network is on channel ${current}.`
           : ""
-    }</p>`;
+    }${scan.truncated ? " The list was cut at 40 networks." : ""}</p>
+    ${advice ? `<ul class="advice">${advice}</ul>` : ""}`;
 }
 
 /* ------------------------------------------------------------------- render */
@@ -337,11 +355,16 @@ function renderProbe() {
   const icmpBox = $("icmpBox");
   if (icmp.length) {
     icmpBox.classList.remove("hidden");
-    icmpBox.innerHTML =
-      `<b>ICMP check</b> ` +
-      icmp
-        .map((i) => `${esc(i.host)}: ${i.loss}% loss, avg ${num(i.avg)} ms`)
-        .join(" · ");
+    const list = icmp
+      .map((i) => {
+        const seen = typeof i.received === "number" ? i.received : i.loss < 100 ? 1 : 0;
+        if (!seen) return `${esc(i.host)}: no ICMP reply (usually blocked, not down)`;
+        return `${esc(i.host)}: avg ${num(i.avg)} ms, jitter ${num(i.jitter)} ms, ${num(i.loss)}% loss`;
+      })
+      .join(" · ");
+    icmpBox.innerHTML = `<b>ICMP echo</b> ${list}${
+      p.transport ? `<div class="meta" style="margin-top:6px">${esc(p.transport)}</div>` : ""
+    }`;
   } else {
     icmpBox.classList.add("hidden");
   }
@@ -351,46 +374,52 @@ function renderBloat() {
   const box = $("bloatBox");
   const b = state.bloat;
   if (!b) {
-    box.innerHTML = `<p class="empty">Not tested. This downloads for ~7 s to load your line, so skip it on metered data.</p>`;
+    box.innerHTML = `<p class="empty">Not tested. This loads your line with downloads, then uploads, for about 15 s, so skip it on metered data.</p>`;
     return;
   }
-  if (b.grade === undefined || b.grade === "n/a") {
+  const phases = [b.download, b.upload].filter(Boolean);
+  const graded = phases.filter((p) => p.grade && p.grade !== "n/a");
+  // Older stored runs only carry the download figures; keep them readable.
+  const legacy = !phases.length && b.grade && b.grade !== "n/a";
+  if (!graded.length && !legacy) {
     // A blocked test download and a line that drops every ping are different problems, and
     // the loss figure is what tells them apart.
     const why =
       b.error ||
+      b.verdict ||
+      phases.map((p) => p.error).filter(Boolean).join(" ") ||
       (Number(b.loaded?.loss) >= 100
         ? "every ping sent while the line was busy failed (100% loss), so there is no loaded latency to compare against idle."
         : "no latency samples came back under load.");
-    box.innerHTML = `<p class="empty">${b.error ? esc(why) : `Could not measure — ${esc(why)}`}</p>`;
+    box.innerHTML = `<p class="empty">${esc(why)}</p>`;
     return;
   }
-  const meaning = {
-    A: "Excellent. Gaming stays smooth even while the line is busy.",
-    B: "Good. Barely noticeable while something else is downloading.",
-    C: "Noticeable. Your game will feel worse when the connection is busy.",
-    D: "Poor. Downloads and streams will visibly spike your ping.",
-    F: "Bad. Your ping explodes under any load — the most common cause of 'random' lag.",
-  }[b.grade];
-  // A busy line that drops packets is worse than one that only adds latency, so the loss
-  // is shown next to the added ping instead of being left out of a successful-looking result.
-  const underLoadLoss = Number(b.loaded?.loss) || 0;
-  const idleLoss = Number(b.idle?.loss) || 0;
-  let lossNote = "";
-  if (underLoadLoss > 0) {
-    lossNote = `<br /><span class="bad">${num(underLoadLoss)}% of the pings under load were lost (${b.loaded?.received ?? 0} of ${b.loaded?.sent ?? 0} came back)</span>`;
-  } else if (idleLoss > 0) {
-    lossNote = `<br /><span class="bad">${num(idleLoss)}% of the idle pings were lost</span>`;
-  }
+  const phase = (name, p) => {
+    if (!p) return "";
+    if (p.grade === "n/a" || p.deltaMs === null) {
+      return `<div class="bloat-facts"><b>${name}</b> not measured — ${esc(p.error || "no latency samples under load.")}</div>`;
+    }
+    const loss = Number(p.loaded?.loss) || 0;
+    return `<div class="bloat-facts">
+      <b>${name}</b> ${num(p.mbps, 1)} Mbps moved · idle <b>${num(p.idle?.avg)} ms</b> → under load <b>${num(p.loaded?.avg)} ms</b><br />
+      <span class="${"ABCDF".indexOf(p.grade) <= 2 ? "ok" : "bad"}">${p.deltaMs >= 0 ? "+" : ""}${num(p.deltaMs, 0)} ms added</span> · grade ${p.grade}${
+        loss > 0 ? ` · <span class="bad">${num(loss)}% of pings under load lost</span>` : ""
+      }
+    </div>`;
+  };
+  const legacyHtml = legacy
+    ? `<div class="bloat-facts">idle <b>${num(b.idle?.avg)} ms</b> → under load <b>${num(b.loaded?.avg)} ms</b><br />
+        <span class="${"ABCDF".indexOf(b.grade) <= 2 ? "ok" : "bad"}">${b.deltaMs >= 0 ? "+" : ""}${num(b.deltaMs, 0)} ms added</span> · ${num(
+          b.downloadMbps,
+          1,
+        )} Mbps pulled</div>`
+    : `${phase("Download", b.download)}${phase("Upload", b.upload)}`;
+  const grade = b.overallGrade || b.grade;
   box.innerHTML = `
-    <div class="grade grade-${b.grade.toLowerCase()}">${b.grade}</div>
+    <div class="grade grade-${esc(String(grade).toLowerCase())}">${esc(grade)}</div>
     <div>
-      <div class="bloat-facts">
-        idle <b>${num(b.idle?.avg)} ms</b> → under load <b>${num(b.loaded?.avg)} ms</b><br />
-        <span class="${b.grade <= "C" ? "ok" : "bad"}">${b.deltaMs >= 0 ? "+" : ""}${num(b.deltaMs, 0)} ms added</span>
-        · ${num(b.downloadMbps, 1)} Mbps pulled${lossNote}
-      </div>
-      <p class="meta" style="margin:8px 0 0">${meaning}</p>
+      ${legacyHtml}
+      <p class="meta" style="margin:8px 0 0">${esc(b.verdict || "")}</p>
     </div>`;
 }
 
@@ -404,27 +433,28 @@ function renderDns() {
   const current = (state.connection?.dnsForActive?.servers || []).join(", ") || "automatic";
   box.innerHTML = `
     <table class="data-table">
-      <thead><tr><th>Resolver</th><th class="num">avg</th><th class="num">p95</th><th class="num">answered</th><th></th></tr></thead>
+      <thead><tr><th>Resolver</th><th class="num">median</th><th class="num">worst</th><th class="num">answered</th><th class="num">missed</th><th></th></tr></thead>
       <tbody>
       ${d.resolvers
         .map(
           (r) => `<tr class="${r.id === d.best ? "best-row" : ""}">
           <td><span class="label">${esc(r.label)}</span>${r.id === d.best ? ' <span class="tag">fastest</span>' : ""}
             <div class="sub">${esc(r.servers.join(", "))}</div></td>
-          <td class="num ${r.avg !== null && r.avg < 40 ? "ok" : ""}">${num(r.avg, 0)}</td>
-          <td class="num">${num(r.p95, 0)}</td>
-          <td class="num ${r.failures ? "warn" : "dim"}">${r.answered}/${r.total}</td>
+          <td class="num ${r.median !== null && r.median < 40 ? "ok" : ""}">${num(r.median, 0)}</td>
+          <td class="num">${num(r.worst, 0)}</td>
+          <td class="num ${r.reliable ? "dim" : "warn"}">${r.answered}/${d.domains}</td>
+          <td class="num ${r.missed ? "warn" : "dim"}">${r.missed ? `${r.missed} missed` : "—"}</td>
           <td class="num"><button class="btn btn-small" data-action="dns-apply" data-servers='${esc(
             JSON.stringify(r.servers),
-          )}' data-label="${esc(r.label)}">Use</button></td>
+          )}' data-label="${esc(r.label)}"${r.reliable ? "" : ' disabled title="This resolver missed lookups in this benchmark, so it is not recommended."'}>Use</button></td>
         </tr>`,
         )
         .join("")}
       </tbody>
     </table>
-    <p class="meta">Currently in use on ${esc(state.alias || "this adapter")}: <b>${esc(current)}</b> · fastest now: <b>${esc(
-      d.bestLabel || "unknown",
-    )}</b></p>`;
+    <p class="meta">Currently in use on ${esc(state.alias || "this adapter")}: <b>${esc(current)}</b>. ${esc(
+      d.verdict || "No verdict.",
+    )}</p>`;
 }
 
 /* Fixes are described once, in lib/catalog.mjs. This file only decides what the live
@@ -725,8 +755,8 @@ async function runProbe() {
 async function runBloat() {
   const btn = $("runBloat");
   busy(btn, true, "Loading line…");
-  $("bloatBox").innerHTML = `<p class="empty">Measuring idle latency, then saturating the link for a few seconds…</p>`;
-  const r = await api("/api/bufferbloat", { seconds: 6 });
+  $("bloatBox").innerHTML = `<p class="empty">Measuring idle latency, then loading the line with downloads, then uploads…</p>`;
+  const r = await api("/api/bufferbloat", { seconds: 6, direction: "both" });
   busy(btn, false);
   if (!r.ok && !r.result?.ok) {
     // Even a failed test carries figures worth showing: how many pings were lost under
@@ -773,6 +803,7 @@ async function scanWifi() {
     toast(r.scan?.reason || "Wi-Fi scan failed — it needs administrator rights and Location services.", "bad");
   }
   state.scan = r.scan;
+  state.wifiAdvice = r.advice || [];
   renderScan();
 }
 
