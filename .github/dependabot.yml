@@ -1,0 +1,12 @@
+# The release workflow pins its actions to full commit SHAs, so a new release only reaches
+# it through a reviewed pull request. This is that reviewer.
+#
+# The app itself has no npm dependencies (package.json lists none and there is no lockfile),
+# so there is nothing for an npm audit to report; if a dependency is ever added, add an
+# "npm" entry here in the same change.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -17,14 +17,21 @@ on:
         description: "Existing tag to publish, for example v1.0.0"
         required: true
 
+# Third-party actions are pinned to the commit each tag pointed at when this file was
+# written, not to a moving tag: a tag (or a compromised account behind it) can be moved
+# without any commit here, and the workflow would silently run different code. Dependabot
+# raises a pull request when a new release is available, so the pin is reviewed like code.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows-installer:
     runs-on: windows-latest
+    # Only this job publishes, so only this job may write to the repository.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
@@ -66,6 +73,7 @@ jobs:
           node lib/db-warning.test.mjs
           node lib/drift.test.mjs
           node lib/concurrency.test.mjs
+          node lib/elevation-channel.test.mjs
           node lib/server-guards.test.mjs
           node lib/wifi-band.test.mjs
           node lib/paths.test.mjs
@@ -84,7 +92,7 @@ jobs:
         run: ./installer/build.ps1 -Version $env:VERSION_NUMBER -RequireInstaller
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: PingLab ${{ steps.version.outputs.tag }}
