@@ -708,6 +708,7 @@ function Update-Probe($p) {
                 if ($null -ne $u.pathMs) { $title += ', path ' + (N $u.pathMs) + ' ms' }
                 $title += ')'
             }
+            elseif ($u.state -eq 'unexpected') { $title += ' (replied with something else, untimed)' }
             else { $title += ' (no reply)' }
         }
         $it = New-Object System.Windows.Forms.ListViewItem($title)
@@ -734,6 +735,7 @@ function Update-Probe($p) {
     $udpRows = @($p.udp | Where-Object { $null -ne $_ } | ForEach-Object {
         if ($_.state -eq 'answered') { 'UDP {0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }
         elseif ($_.state -eq 'closed') { 'UDP {0}: port closed, path {1} ms (not service latency)' -f $_.label, (N $_.pathMs) }
+        elseif ($_.state -eq 'unexpected') { 'UDP {0}: replied with something else, untimed (not loss)' -f $_.label }
         else { 'UDP {0}: no reply (not loss)' -f $_.label }
     })
     $rowsText = @(@($p.results | ForEach-Object { '{0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }) + $udpRows) -join ' || '

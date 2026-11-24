@@ -246,7 +246,14 @@ async function measurePhase(endpoints) {
   const runs = [];
   for (let i = 0; i < BENCH.repeats; i += 1) {
     const probe = await runProbe(endpoints, { count: BENCH.count });
-    runs.push({ at: new Date().toISOString(), results: probe.results, summary: summarizeProbe(probe) });
+    // The UDP rows are kept with the TCP ones: lib/bench.mjs compares whichever transport
+    // answered in every repeat, and refuses a comparison that switched between the two.
+    runs.push({
+      at: new Date().toISOString(),
+      results: probe.results,
+      udp: probe.udp,
+      summary: summarizeProbe(probe),
+    });
   }
   return runs;
 }

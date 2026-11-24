@@ -468,6 +468,7 @@ function viewProbe(W) {
     const rows = p.udp.map((u) => {
       if (u.state === "answered") return `${u.label}: ${n1(u.avg)} ms · jitter ${n1(u.jitter)} ms · ${n0(u.loss)}% loss`;
       if (u.state === "closed") return `${u.label}: port closed${u.pathMs === null ? "" : ` (path ${n1(u.pathMs)} ms)`}`;
+      if (u.state === "unexpected") return `${u.label}: not this probe's reply (untimed)`;
       return `${u.label}: no UDP reply`;
     });
     out.push(`  ${D}UDP (${p.udp.length} game endpoint${p.udp.length === 1 ? "" : "s"}): ${rows.join(" · ")}${R}`);

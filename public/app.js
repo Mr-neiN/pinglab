@@ -381,6 +381,10 @@ function renderProbe() {
         if (u.state === "closed") {
           return `${esc(u.label)}: port closed${u.pathMs === null ? "" : ` (path ${num(u.pathMs)} ms)`}`;
         }
+        // Something came back, but not this probe's answer, so there is no round-trip to time.
+        if (u.state === "unexpected") {
+          return `${esc(u.label)}: replied with something else (not this probe; untimed)`;
+        }
         return `${esc(u.label)}: no UDP reply (a service ignores unknown packets; not loss)`;
       })
       .join(" · ");
@@ -785,7 +789,11 @@ function renderBench() {
   $("benchMsg").textContent = pending
     ? `Baseline captured ${timeOf(pending.at)}: median ${num(pending.baseline?.values?.latencyMs)} ms, p95 ${num(
         pending.baseline?.values?.p95Ms,
-      )} ms, jitter ${num(pending.baseline?.values?.jitterMs)} ms, loss ${num(pending.baseline?.values?.lossPct)}%. Apply the setting, then measure again.`
+      )} ms, jitter ${num(pending.baseline?.values?.jitterMs)} ms, loss ${num(pending.baseline?.values?.lossPct)}%${
+        pending.baseline?.transport && pending.baseline.transport !== "tcp"
+          ? ` over ${esc(pending.baseline.transportLabel)}`
+          : ""
+      }. Apply the setting, then measure again.`
     : latest
       ? `Last comparison ${timeOf(latest.createdAt)}.`
       : "Not started. A baseline is three full latency runs with the endpoints above, and so is the measurement after the change.";
@@ -1076,8 +1084,12 @@ async function tweak(action, extra = {}) {
 
 /* ---------------------------------------------------------------- endpoints */
 
-function endpointRow(ep = { id: "", label: "", host: "", port: 443, kind: "game" }) {
+function endpointRow(ep = { id: "", label: "", host: "", port: 443, kind: "game", protocol: "echo" }) {
   const row = document.createElement("div");
+  // The row always carries a real protocol. The server refuses a name it does not know, and the
+  // blank value a select shows with no default is not one; an endpoint saved before this field
+  // existed gets the controlled echo, which is the same choice the probe itself makes.
+  const protocol = ep.protocol || "echo";
   row.className = "endpoint-row";
   row.innerHTML = `
     <input data-field="label" placeholder="Label" value="${esc(ep.label)}" />
@@ -1086,6 +1098,11 @@ function endpointRow(ep = { id: "", label: "", host: "", port: 443, kind: "game"
     <select data-field="kind">
       <option value="game"${ep.kind === "game" ? " selected" : ""}>game</option>
       <option value="dns"${ep.kind === "dns" ? " selected" : ""}>dns</option>
+    </select>
+    <select data-field="protocol" title="The UDP query this endpoint is timed with">
+      <option value="echo"${protocol === "echo" ? " selected" : ""}>UDP: echo</option>
+      <option value="a2s"${protocol === "a2s" ? " selected" : ""}>UDP: A2S_INFO</option>
+      <option value="q3"${protocol === "q3" ? " selected" : ""}>UDP: Quake 3</option>
     </select>
     <button class="btn btn-small btn-ghost" data-remove="1" title="Remove">✕</button>`;
   row.dataset.id = ep.id || "";
@@ -1114,6 +1131,9 @@ async function saveEndpoints() {
         host: get("host"),
         port: Number(get("port")) || 443,
         kind: row.querySelector('[data-field="kind"]').value,
+        // Sent as chosen: the select only offers protocols the server accepts, and an empty
+        // value is refused there rather than being silently turned into an echo.
+        protocol: row.querySelector('[data-field="protocol"]').value,
       };
     })
     .filter((e) => e.host);
