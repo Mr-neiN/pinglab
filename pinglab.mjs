@@ -118,6 +118,9 @@ async function refreshCore() {
     // A change PingLab made that Windows has since put back, so the fixes view can say it
     // above the rows instead of leaving the contradiction to be noticed.
     drift: driftStatus(tw),
+    // A settings file that could not be used travels with the state, so the dashboard prints
+    // it in the same sentence the page and the GUI use.
+    configProblem: config.problem,
     endpoints: config.endpoints,
     runs: listRuns(null, 12),
     soaks: listSoakRuns(6),
@@ -604,6 +607,14 @@ function render() {
       lines.push(` ${i === 0 ? `${YEL}!${R}` : " "} ${YEL}${l}${R}`);
     });
   }
+  // The endpoint list falling back to the built-in one because the settings file could not be
+  // used is reported the same way, in the same sentence every other surface prints.
+  const configProblem = ui.core?.configProblem;
+  if (configProblem) {
+    wrapText(configProblem.message, W - 6).forEach((l, i) => {
+      lines.push(` ${i === 0 ? `${YEL}!${R}` : " "} ${YEL}${l}${R}`);
+    });
+  }
   lines.push(` ${D}${TITLES[ui.view] || ""}${R}`);
   const body = (VIEWS[ui.view] || viewDash)(W).flatMap((entry) => String(entry).split("\n"));
   // A view taller than the window is clipped instead of being allowed to scroll the frame,
@@ -737,6 +748,9 @@ async function bridgeCommand(cmd, args = {}) {
         // the only place a user who just starts the app would otherwise never hear about a
         // database that had to be set aside.
         history: dbStatus(),
+        // The same reading /api/state gives the page, so the GUI's status row can report a
+        // settings file that could not be used instead of starting from defaults silently.
+        config: { problem: ui.core?.configProblem ?? null },
         runs: ui.core?.runs || [],
         soaks: ui.core?.soaks || [],
         soak: soakStatus(),

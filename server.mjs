@@ -196,6 +196,9 @@ async function buildState() {
     // A database that had to be set aside during start-up is not a silent reset: the page
     // says so above the verdict, the way the GUI says it in its status row.
     history: dbStatus(),
+    // A settings file that could not be used is reported the same way, once, in the state
+    // every surface draws: the page above the verdict, the GUI in its status row.
+    config: { problem: config.problem },
     endpoints: config.endpoints,
     resolvers: RESOLVERS,
     recentRuns: listRuns(null, 12),
@@ -316,11 +319,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && path === "/api/endpoints") {
       const body = await readJson(req);
       const endpoints = endpointList(body.endpoints);
-      const config = await loadConfig();
-      await saveConfig({ ...config, endpoints });
+      // Read before writing. If the file this replaces could not be used, its reason and the
+      // name of the copy made from it ride back with this save instead of being replaced
+      // without a word - the silent overwrite that used to lose a hand-edited file.
+      const previous = await loadConfig();
+      await saveConfig({ endpoints });
       // The endpoint list is part of the state the page renders.
       stateCache.invalidate();
-      return sendJson(res, 200, { ok: true, endpoints });
+      return sendJson(res, 200, { ok: true, endpoints, previousProblem: previous.problem });
     }
 
     if (req.method === "POST" && path === "/api/wifi-scan") {

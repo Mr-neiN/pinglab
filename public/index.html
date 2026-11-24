@@ -24,6 +24,9 @@
     <main>
       <!-- Filled from /api/state when the history database had to be set aside at start-up. -->
       <section id="historyNotice" class="hintbox dbnotice hidden" role="status"></section>
+      <!-- Filled from /api/state when data/config.json could not be used, so the endpoint
+           list fell back to the built-in one; the kept copy's name is in the sentence. -->
+      <section id="configNotice" class="hintbox dbnotice hidden" role="status"></section>
 
       <section id="verdict" class="verdict">
         <span class="verdict-label">Verdict</span>

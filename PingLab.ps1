@@ -800,6 +800,15 @@ function Refresh-State {
                 } else {
                     Set-Status ([string]$dbState.problem.message) 'warn'
                 }
+            } elseif ($null -ne $r.data.config -and $null -ne $r.data.config.problem) {
+                Log ('settings problem: ' + $r.data.config.problem.message)
+                $lblStatus.ToolTipText = [string]$r.data.config.problem.message
+                $copyLeaf = if ($null -ne $r.data.config.problem.copy) { [System.IO.Path]::GetFileName([string]$r.data.config.problem.copy) } else { $null }
+                if ($copyLeaf) {
+                    Set-Status ("Settings file could not be used - the endpoint list is back to the built-in defaults, and the old file was kept as $copyLeaf.") 'warn'
+                } else {
+                    Set-Status ([string]$r.data.config.problem.message) 'warn'
+                }
             } else {
                 Set-Status 'Ready.' 'good'
             }

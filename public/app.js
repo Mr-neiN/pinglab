@@ -694,6 +694,24 @@ function renderHistoryNotice() {
   el.classList.remove("hidden");
 }
 
+/**
+ * A settings file that could not be used is not a silent fall back to the built-in endpoint
+ * list: the server reports it once per run in /api/state, and it belongs above the verdict,
+ * beside the database warning, rather than in a log nobody opens.
+ */
+function renderConfigNotice() {
+  const el = $("configNotice");
+  const problem = state.config?.problem;
+  if (!problem) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  el.textContent = problem.message;
+  el.title = problem.message;
+  el.classList.remove("hidden");
+}
+
 function renderHistory(runs) {
   const list = $("historyList");
   if (!runs || !runs.length) {
@@ -721,6 +739,7 @@ async function loadState() {
   state.tweak = s.tweakState;
   state.pending = s.pending;
   state.history = s.history || null;
+  state.config = s.config || null;
   state.endpoints = s.endpoints || [];
   state.catalog = s.catalog || null;
   state.alias = s.connection.activeRoute?.alias || null;
@@ -729,6 +748,7 @@ async function loadState() {
   renderFixes();
   renderEndpoints();
   renderHistoryNotice();
+  renderConfigNotice();
   renderHistory(s.recentRuns);
   updateVerdict();
 }
@@ -900,9 +920,20 @@ async function saveEndpoints() {
   const r = await api("/api/endpoints", { endpoints });
   if (r.ok) {
     state.endpoints = r.endpoints;
+    // The file just written loads cleanly, so a notice about the old one is no longer true.
+    // The toast below still says where the old bytes were kept.
+    state.config = { problem: null };
     renderEndpoints();
+    renderConfigNotice();
     $("endpointMsg").textContent = "Saved.";
-    toast("Endpoints saved", "good");
+    if (r.previousProblem) {
+      // The file this replaced could not be used and was kept beside it. Saying so is the
+      // point: the old version replaced it with the defaults and mentioned nothing.
+      $("endpointMsg").textContent = "Saved. The previous file was kept aside.";
+      toast(r.previousProblem.message, "warn");
+    } else {
+      toast("Endpoints saved", "good");
+    }
   } else {
     $("endpointMsg").textContent = r.error || "Save failed";
     toast(r.error || "Could not save endpoints", "bad");
