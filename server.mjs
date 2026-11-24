@@ -8,7 +8,7 @@ import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
 import { snapshot, wifi, dnsServers, routes } from "./lib/net.mjs";
 import { analyseWifi, wifiAdvice, scanWifi } from "./lib/wifi.mjs";
-import { dnsWinner, dnsVerdict, bloatVerdict, transportText } from "./lib/report.mjs";
+import { dnsWinner, dnsVerdict, bloatVerdict, transportText, scanFreshnessText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { createStateCache } from "./lib/state-cache.mjs";
@@ -324,8 +324,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && path === "/api/wifi-scan") {
-      // The same refresh path the terminal and the GUI use: a cached scan holding one
-      // network is not a survey, and the page must not present it as one.
+      // The same scan the terminal and the GUI read. The engine asks Windows to scan and waits
+      // for the completion notice; the page gets that sentence from the same function the
+      // other surfaces print, so no surface can claim more (or less) than the shim confirmed.
       const scan = await scanWifi();
       let advice = [];
       if (scan?.ok) {
@@ -336,7 +337,7 @@ const server = http.createServer(async (req, res) => {
           advice = [];
         }
       }
-      return sendJson(res, 200, { ok: scan.ok, scan, advice });
+      return sendJson(res, 200, { ok: scan.ok, scan, advice, freshnessText: scanFreshnessText(scan.freshness) });
     }
 
     if (req.method === "POST" && path === "/api/tweak") {

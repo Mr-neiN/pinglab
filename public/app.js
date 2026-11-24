@@ -268,18 +268,17 @@ function renderScan() {
   const preferred = [36, 40, 44, 48, 149, 153, 157, 161, 165];
   // 6 GHz reuses the 5 GHz channel numbers, so only a 5 GHz neighbour makes a 5 GHz channel busy.
   const busy5 = new Set(counts.filter((c) => c.band === "5 GHz").map((c) => c.channel));
-  // A cached scan is not a survey, so it cannot support "this channel is empty" advice.
-  const free5 = scan.stale ? [] : preferred.filter((ch) => !busy5.has(ch)).slice(0, 4);
+  // Whether the scan was confirmed comes from the WLAN API through the engine; the page prints
+  // that sentence and never infers freshness from the list itself.
+  const freshness = scan.freshnessText ? `<p class="meta">${esc(scan.freshnessText)}</p>` : "";
+  const free5 = preferred.filter((ch) => !busy5.has(ch)).slice(0, 4);
   const wifi = state.connection?.wifi || {};
   const current = wifi.channel;
   const mine = counts.find((c) => c.channel === current && (!wifi.band || !c.band || c.band === wifi.band));
-  const stale = scan.stale
-    ? `<p class="meta"><span class="warn">Cached scan:</span> Windows returned ${scan.networks.length} network(s) from its cache, so these counts are not a survey. Run the scan again with the Wi-Fi panel open.</p>`
-    : "";
   const advice = (state.wifiAdvice || []).map(([kind, text]) => `<li class="${esc(kind)}">${esc(text)}</li>`).join("");
 
   box.innerHTML = `
-    ${stale}
+    ${freshness}
     <div class="channel-grid">
       ${counts
         .map(
@@ -290,12 +289,10 @@ function renderScan() {
         )
         .join("")}
     </div>
-    <p class="meta">${scan.networks.length} networks visible. ${
+    <p class="meta">${scan.networks.length} networks in this scan. ${
       free5.length
         ? `Emptiest visible 5 GHz channels: <b>${free5.join(", ")}</b>.`
-        : scan.stale
-          ? ""
-          : "Every common 5 GHz channel has at least one neighbour in this scan."
+        : "Every common 5 GHz channel has at least one neighbour in this scan."
     } ${
       mine
         ? `You are on ${wifi.band ? esc(wifi.band) + " " : ""}channel ${current}, which is shared with other visible networks.`
@@ -802,7 +799,9 @@ async function scanWifi() {
     msg.textContent = r.scan?.reason || "Scan failed";
     toast(r.scan?.reason || "Wi-Fi scan failed — it needs administrator rights and Location services.", "bad");
   }
-  state.scan = r.scan;
+  // A failed request carries no scan at all: keep it null so renderScan stays hidden instead
+  // of drawing an empty "unavailable" panel over a toast that already explained it.
+  state.scan = r.scan ? { ...r.scan, freshnessText: r.freshnessText || null } : null;
   state.wifiAdvice = r.advice || [];
   renderScan();
 }

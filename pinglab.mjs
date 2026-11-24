@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
-import { bloatVerdict, transportText } from "./lib/report.mjs";
+import { bloatVerdict, transportText, scanFreshnessText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
@@ -198,15 +198,14 @@ async function runProbe() {
 async function runScan() {
   ui.busy = "scanning Wi-Fi…";
   ui.view = "wifi";
-  const scan = await scanWifi({
-    onStale: () => {
-      ui.busy = "Windows returned a cached scan — refreshing…";
-    },
-  });
+  // The engine resolves the Wi-Fi adapter and asks Windows for a scan before reading the list;
+  // the result says whether Windows confirmed that scan.
+  const scan = await scanWifi();
   ui.scan = { scan, at: Date.now() };
   ui.busy = null;
+  // A confirmed scan is dated; without one the list stands alone and no freshness is claimed.
+  // Either way every count in the advice stays scoped to this scan.
   if (!scan?.ok) say(scan?.reason || "Wi-Fi scan failed.", "bad", 9000);
-  else if (scan.stale) say("Windows is still serving a cached scan — open the Wi-Fi panel (Win+A) and press s.", "warn", 12000);
 }
 
 async function runDns() {
@@ -482,12 +481,12 @@ function viewWifi(W) {
     out.push(`  ${c}${text}${R}`);
   }
   out.push("");
-  if (s.scan.stale) {
-    out.push(`  ${YEL}This list is a cached scan from Windows, not a fresh one — press s to refresh.${R}`);
-  } else if (s.scan.refreshed) {
-    out.push(`  ${D}Windows' scan cache was stale, so the Wi-Fi panel was opened briefly to refresh it.${R}`);
-  }
-  out.push(`  ${D}snapshot ${clock(s.at)} — signal % is coarse; hidden SSIDs are undercounted. s rescans.${R}`);
+  const freshness =
+    scanFreshnessText(s.scan.freshness) ||
+    "This is only the list netsh returned; no fresh-or-cached verdict is claimed.";
+  out.push(
+    `  ${D}snapshot ${clock(s.at)} — ${freshness} signal % is coarse and hidden SSIDs are undercounted. s rescans.${R}`,
+  );
   return out;
 }
 
@@ -710,6 +709,10 @@ function textWifi() {
   print(a.nets.map((n) => `  ${pad(n.ssid, 24)} ${pad(n.band || bandOf(n.channel) || "?", 8)} ch ${padL(n.channel ?? "?", 3)}  ${n.signal ?? "?"}%`));
   print([""]);
   for (const [kind, text] of wifiAdvice(a, ui.core?.connection?.wifi || {}, scanData.scan)) print([`  ${text}`]);
+  // The one-shot CLI path prints the scan confirmation too, from the same sentence the
+  // interactive view, the page and the GUI use.
+  const freshness = scanFreshnessText(scanData.scan?.freshness);
+  if (freshness) print(["", `  ${freshness}`]);
   print([""]);
 }
 
@@ -765,7 +768,7 @@ async function bridgeCommand(cmd, args = {}) {
       const advice = scan?.ok
         ? wifiAdvice(analyseWifi(scan, ui.core?.connection?.wifi || {}), ui.core?.connection?.wifi || {}, scan)
         : [];
-      return { scan, advice, message: ui.message?.text || null };
+      return { scan, advice, freshnessText: scanFreshnessText(scan?.freshness), message: ui.message?.text || null };
     }
     case "dns":
       await runDns();

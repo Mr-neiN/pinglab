@@ -641,7 +641,7 @@ function Update-Wifi($d) {
     $lvWifi.Items.Clear()
     if ($null -ne $d.scan -and $d.scan.ok) {
         foreach ($n in $d.scan.networks) {
-            $band = if ($n.channel -le 14) { '2.4 GHz' } else { '5 GHz' }
+            $band = if ([string]::IsNullOrWhiteSpace([string]$n.band)) { 'unknown' } else { [string]$n.band }
             $it = New-Object System.Windows.Forms.ListViewItem($(if ([string]::IsNullOrEmpty($n.ssid)) { '(hidden)' } else { $n.ssid }))
             [void]$it.SubItems.Add($band)
             [void]$it.SubItems.Add("$($n.channel)")
@@ -658,12 +658,12 @@ function Update-Wifi($d) {
         $txtAdvice.AppendText(($d.scan.reason + "`n"))
         return
     }
-    if ($d.scan.stale) {
-        $txtAdvice.SelectionColor = [System.Drawing.Color]::FromArgb(165, 105, 0)
-        $txtAdvice.AppendText("Windows returned a cached scan - press Scan again in a moment.`n`n")
-    } elseif ($d.scan.refreshed) {
-        $txtAdvice.SelectionColor = [System.Drawing.Color]::FromArgb(130, 130, 130)
-        $txtAdvice.AppendText("Windows' scan cache was stale; the Wi-Fi panel was opened briefly to refresh it.`n`n")
+    # A scan Windows confirmed finished is dated here, from the same sentence the terminal and
+    # the page print; without a confirmation it says so and claims nothing about freshness.
+    # Either way every count below stays scoped to what this scan returned.
+    if (-not [string]::IsNullOrWhiteSpace([string]$d.freshnessText)) {
+        $txtAdvice.SelectionColor = [System.Drawing.Color]::FromArgb(90, 90, 90)
+        $txtAdvice.AppendText(($d.freshnessText + "`n`n"))
     }
     foreach ($line in $d.advice) {
         $kind = $line[0]
