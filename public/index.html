@@ -27,6 +27,9 @@
       <!-- Filled from /api/state when data/config.json could not be used, so the endpoint
            list fell back to the built-in one; the kept copy's name is in the sentence. -->
       <section id="configNotice" class="hintbox dbnotice hidden" role="status"></section>
+      <!-- Filled from /api/state when this start's update check found a newer release. A check
+           that could not be made leaves this hidden rather than claiming the copy is current. -->
+      <section id="updateNotice" class="hintbox dbnotice hidden" role="status"></section>
 
       <section id="verdict" class="verdict">
         <span class="verdict-label">Verdict</span>

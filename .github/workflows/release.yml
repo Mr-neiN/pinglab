@@ -58,6 +58,13 @@ jobs:
           if ($tag -notmatch '\Av(\d+\.\d+\.\d+)\z') {
             throw "Tag '$tag' must look like v1.2.3 (no suffix), because the installer version is numeric."
           }
+          # The tag and the package must agree: the app reports its version from package.json,
+          # and the update check compares it with the newest release. A tag bumped without the
+          # package would ship a copy that calls itself older than it is.
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($packageVersion -ne $Matches[1]) {
+            throw "package.json says $packageVersion but tag $tag is $($Matches[1]). Bump package.json in the commit being tagged."
+          }
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "number=$($Matches[1])" >> $env:GITHUB_OUTPUT
 

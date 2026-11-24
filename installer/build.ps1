@@ -32,7 +32,10 @@ if ($Version -notmatch '^\d+\.\d+\.\d+') {
 }
 $packageVersion = (Get-Content (Join-Path $root "package.json") -Raw | ConvertFrom-Json).version
 if ($packageVersion -ne $Version) {
-    Write-Warning "package.json says $packageVersion, building $Version"
+    # A release whose files disagree about their version cannot be trusted to report updates
+    # correctly, so this is refused instead of warned about: bump package.json in the commit
+    # that is tagged, and the tag, the installer and the running copy all say the same number.
+    throw "package.json says $packageVersion but this build is $Version. Bump package.json to match the tag before building."
 }
 
 $stage = Join-Path $dist "PingLab-$Version"

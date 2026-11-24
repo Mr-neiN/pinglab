@@ -7,6 +7,8 @@ const state = {
   history: null,
   endpoints: [],
   catalog: null,
+  protocols: null,
+  update: null,
   probe: null,
   bloat: null,
   dns: null,
@@ -744,6 +746,24 @@ function renderConfigNotice() {
   el.classList.remove("hidden");
 }
 
+/**
+ * A newer release is reported in the sentence the TUI and the GUI print. The server asks GitHub
+ * once per start, so a check that could not be made has no sentence and no notice: an unchecked
+ * copy is never drawn as "up to date".
+ */
+function renderUpdateNotice() {
+  const el = $("updateNotice");
+  const sentence = state.update?.sentence;
+  if (!sentence) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  el.textContent = sentence;
+  el.title = sentence;
+  el.classList.remove("hidden");
+}
+
 /* ------------------------------------------------------------ before / after */
 
 /**
@@ -796,7 +816,7 @@ function renderBench() {
       }. Apply the setting, then measure again.`
     : latest
       ? `Last comparison ${timeOf(latest.createdAt)}.`
-      : "Not started. A baseline is three full latency runs with the endpoints above, and so is the measurement after the change.";
+      : "Not started. A baseline is five full latency runs with the endpoints above, and so is the measurement after the change.";
 
   const result = latest?.data?.result;
   if (!result) {
@@ -948,6 +968,8 @@ async function loadState() {
   state.config = s.config || null;
   state.endpoints = s.endpoints || [];
   state.catalog = s.catalog || null;
+  state.protocols = s.protocols || null;
+  state.update = s.update || null;
   state.alias = s.connection.activeRoute?.alias || null;
   renderLink();
   renderConnection();
@@ -955,6 +977,7 @@ async function loadState() {
   renderEndpoints();
   renderHistoryNotice();
   renderConfigNotice();
+  renderUpdateNotice();
   renderBench();
   renderHistory(s.recentRuns);
   updateVerdict();
@@ -1084,6 +1107,18 @@ async function tweak(action, extra = {}) {
 
 /* ---------------------------------------------------------------- endpoints */
 
+/**
+ * The protocol options come from the server (`state.protocols`, built from lib/udp-proto.mjs), so
+ * a protocol added to the engine is offered here without a second list going stale.
+ */
+function protocolOptions(selected) {
+  const list = state.protocols?.length ? state.protocols : [{ id: "echo", label: "controlled echo" }];
+  const chosen = list.some((p) => p.id === selected) ? selected : list.some((p) => p.id === "echo") ? "echo" : list[0].id;
+  return list
+    .map((p) => `<option value="${esc(p.id)}"${p.id === chosen ? " selected" : ""}>UDP: ${esc(p.label)}</option>`)
+    .join("");
+}
+
 function endpointRow(ep = { id: "", label: "", host: "", port: 443, kind: "game", protocol: "echo" }) {
   const row = document.createElement("div");
   // The row always carries a real protocol. The server refuses a name it does not know, and the
@@ -1100,9 +1135,7 @@ function endpointRow(ep = { id: "", label: "", host: "", port: 443, kind: "game"
       <option value="dns"${ep.kind === "dns" ? " selected" : ""}>dns</option>
     </select>
     <select data-field="protocol" title="The UDP query this endpoint is timed with">
-      <option value="echo"${protocol === "echo" ? " selected" : ""}>UDP: echo</option>
-      <option value="a2s"${protocol === "a2s" ? " selected" : ""}>UDP: A2S_INFO</option>
-      <option value="q3"${protocol === "q3" ? " selected" : ""}>UDP: Quake 3</option>
+      ${protocolOptions(protocol)}
     </select>
     <button class="btn btn-small btn-ghost" data-remove="1" title="Remove">✕</button>`;
   row.dataset.id = ep.id || "";

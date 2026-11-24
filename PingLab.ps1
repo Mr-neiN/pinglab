@@ -850,6 +850,7 @@ function Refresh-State {
             $dbState = $r.data.history
             if ($null -ne $dbState -and $null -ne $dbState.problem) {
                 Log ('history problem: ' + $dbState.problem.message)
+                $script:startupProblem = $true
                 $lblStatus.ToolTipText = [string]$dbState.problem.message
                 $copyLeaf = if ($null -ne $dbState.problem.copy) { [System.IO.Path]::GetFileName([string]$dbState.problem.copy) } else { $null }
                 if ($copyLeaf) {
@@ -859,6 +860,7 @@ function Refresh-State {
                 }
             } elseif ($null -ne $r.data.config -and $null -ne $r.data.config.problem) {
                 Log ('settings problem: ' + $r.data.config.problem.message)
+                $script:startupProblem = $true
                 $lblStatus.ToolTipText = [string]$r.data.config.problem.message
                 $copyLeaf = if ($null -ne $r.data.config.problem.copy) { [System.IO.Path]::GetFileName([string]$r.data.config.problem.copy) } else { $null }
                 if ($copyLeaf) {
@@ -869,6 +871,17 @@ function Refresh-State {
             } else {
                 Set-Status 'Ready.' 'good'
             }
+        }
+        # A newer release is worth one line in the status row the first time it is known. The
+        # check runs in the engine's background, so it can arrive after the first state read; it
+        # is reported once, and it never displaces a start-up problem, which is about this machine
+        # rather than about a newer build.
+        $upd = $r.data.update
+        if (-not $script:updateSeen -and -not $script:startupProblem -and $null -ne $upd -and -not [string]::IsNullOrWhiteSpace([string]$upd.sentence)) {
+            $script:updateSeen = $true
+            Log ('update: ' + [string]$upd.sentence)
+            $lblStatus.ToolTipText = [string]$upd.sentence
+            Set-Status ([string]$upd.sentence) 'warn'
         }
         # The last before/after comparison and the last rollback are reported with the sentence the
         # page and the terminal use, so "rolled back" means the same thing in all three. What was
@@ -1099,7 +1112,9 @@ if ($started) {
     $timer.Start()
     Set-Status 'Reading system state...' 'info'
     $script:startupPending = $true
+    $script:startupProblem = $false
     $script:benchSeen = $false
+    $script:updateSeen = $false
     Refresh-State
     Send-Cmd 'soakStatus' @{} {
         param($r)

@@ -34,6 +34,7 @@ import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
 import { saveRun, previousRun, listRuns, dbStatus } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, summarizeRun, listSoakRuns, soakLabel } from "./lib/soak.mjs";
 import { isElevated } from "./lib/ps.mjs";
+import { checkForUpdate } from "./lib/update.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 try {
@@ -78,6 +79,18 @@ function colour(value, good, warn) {
   if (value <= warn) return YEL;
   return RED;
 }
+
+/* ----------------------------------------------------------- update check */
+
+/**
+ * Asked once per process, in the background: no view waits for GitHub. A check that cannot be
+ * made leaves `pending` or `checked: false` and no sentence, so nothing is ever called current
+ * without having compared it.
+ */
+let updateInfo = { checked: false, pending: true };
+checkForUpdate({ url: process.env.PINGLAB_UPDATE_URL || undefined }).then((result) => {
+  updateInfo = result;
+});
 
 /* -------------------------------------------------------------- app state */
 
@@ -633,6 +646,13 @@ function render() {
       lines.push(` ${i === 0 ? `${YEL}!${R}` : " "} ${YEL}${l}${R}`);
     });
   }
+  // A newer release is one line, in the same sentence the page and the GUI show. Nothing is
+  // printed for a copy that is current, and nothing at all when the check could not be made.
+  if (updateInfo.sentence) {
+    wrapText(updateInfo.sentence, W - 6).forEach((l, i) => {
+      lines.push(` ${i === 0 ? `${CYN}↑${R}` : " "} ${CYN}${l}${R}`);
+    });
+  }
   // Both are reported, not just the newer one: the rollback comes first because it is the
   // newer event and says what is still applied, and the comparison it undid stays visible so
   // "why was this rolled back" has an answer without a history command.
@@ -781,6 +801,9 @@ async function bridgeCommand(cmd, args = {}) {
         // The same reading /api/state gives the page, so the GUI's status row can report a
         // settings file that could not be used instead of starting from defaults silently.
         config: { problem: ui.core?.configProblem ?? null },
+        // The start-up update answer, in the same sentence the page and the dashboard print;
+        // `checked: false` means there is nothing to say, not that this copy is current.
+        update: updateInfo,
         // And the same before/after and rollback words the page and the dashboard print.
         benchmark: ui.core?.benchmark ?? null,
         runs: ui.core?.runs || [],

@@ -22,6 +22,8 @@ import { dnsWinner, dnsVerdict, bloatVerdict, transportText, udpText, scanFreshn
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions, actionSpec } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { createStateCache } from "./lib/state-cache.mjs";
+import { checkForUpdate } from "./lib/update.mjs";
+import { UDP_PROTOCOLS } from "./lib/udp-proto.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, tweakById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
 import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus, getRun } from "./lib/db.mjs";
@@ -221,6 +223,9 @@ async function buildState() {
     // Same catalog the TUI and the GUI render, so labels, trade-offs, risk levels and
     // preset contents cannot differ between surfaces.
     catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
+    // The UDP queries an endpoint may name, from the engine's own registry: the page's editor
+    // cannot offer a protocol the server would refuse, or miss one it accepts.
+    protocols: Object.values(UDP_PROTOCOLS).map(({ id, label, describe }) => ({ id, label, describe })),
   };
 }
 
@@ -302,7 +307,9 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === "GET" && path === "/api/state") {
-      return sendJson(res, 200, await stateCache.get());
+      // The update answer is merged at send time rather than inside buildState: it is not a
+      // machine reading, and it can arrive after the state snapshot it would be cached in.
+      return sendJson(res, 200, { ...(await stateCache.get()), update });
     }
 
     if (req.method === "POST" && path === "/api/probe") {
@@ -724,6 +731,17 @@ server.on("clientError", (err, socket) => {
 // A small JSON body may not hold a connection open indefinitely.
 server.headersTimeout = 15000;
 server.requestTimeout = 30000;
+
+/**
+ * Asked once per run, and never awaited: a state read must not wait for GitHub. A check that
+ * cannot be made leaves `checked: false` with no sentence, so an offline machine and a current
+ * one both start quietly, and neither is called up to date.
+ */
+let update = { checked: false, pending: true };
+checkForUpdate({ url: process.env.PINGLAB_UPDATE_URL || undefined }).then((result) => {
+  update = result;
+  if (result.sentence) console.log(`[pinglab] ${result.sentence}`);
+});
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`PingLab running at http://127.0.0.1:${PORT}`);
