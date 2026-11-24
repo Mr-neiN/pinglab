@@ -36,7 +36,7 @@
       <div class="grid">
         <section class="card card-wide">
           <header class="card-head">
-            <h2>Latency &amp; loss <span class="hint">TCP handshake RTT, with an ICMP cross-check</span></h2>
+            <h2>Latency &amp; loss <span class="hint">TCP handshake RTT, UDP to the game port, with an ICMP cross-check</span></h2>
             <button id="runProbe" class="btn">Test latency</button>
           </header>
           <div id="probeMeta" class="meta">Idle.</div>
@@ -57,6 +57,7 @@
             </tbody>
           </table>
           <div id="icmpBox" class="subpanel hidden"></div>
+          <div id="udpBox" class="subpanel hidden"></div>
           <details class="editor">
             <summary>Edit endpoints — put your game server's region IP here for the truest number</summary>
             <div id="endpointRows" class="endpoint-rows"></div>
@@ -66,6 +67,22 @@
               <span id="endpointMsg" class="meta"></span>
             </div>
           </details>
+        </section>
+
+        <section class="card card-wide">
+          <header class="card-head">
+            <h2>Before / after <span class="hint">prove a setting helped — or roll it back</span></h2>
+          </header>
+          <div class="editor-actions">
+            <label class="meta" for="benchTweak">Setting</label>
+            <select id="benchTweak"></select>
+            <button id="benchBaseline" class="btn">1. Capture baseline</button>
+            <button id="benchApply" class="btn btn-ghost" disabled>2. Apply it</button>
+            <button id="benchFinish" class="btn" disabled>3. Measure again</button>
+            <button id="benchRevert" class="btn btn-ghost hidden">Roll back</button>
+          </div>
+          <div id="benchMsg" class="meta">Not started.</div>
+          <div id="benchResult"></div>
         </section>
 
         <section class="card">

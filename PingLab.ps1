@@ -695,14 +695,69 @@ function Update-Probe($p) {
         else { $it.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 60) }
         [void]$lvProbe.Items.Add($it)
     }
+    # UDP rows: games send UDP, so the same grid carries them. Only an answered endpoint has
+    # latency or loss; a closed port shows its path figure in the row title and silence shows
+    # a dash in every number column, so no row can be read as a service figure it is not.
+    foreach ($u in @($p.udp)) {
+        if ($null -eq $u) { continue }
+        $answered = $u.state -eq 'answered'
+        $title = 'UDP: ' + $u.label
+        if (-not $answered) {
+            if ($u.state -eq 'closed') {
+                $title += ' (port closed'
+                if ($null -ne $u.pathMs) { $title += ', path ' + (N $u.pathMs) + ' ms' }
+                $title += ')'
+            }
+            else { $title += ' (no reply)' }
+        }
+        $it = New-Object System.Windows.Forms.ListViewItem($title)
+        if ($answered) {
+            [void]$it.SubItems.Add((N $u.avg))
+            [void]$it.SubItems.Add((N $u.p95))
+            [void]$it.SubItems.Add((N $u.jitter))
+            [void]$it.SubItems.Add(((N $u.loss) + '%'))
+        }
+        else {
+            # Silence and a closed port have no service latency and no loss to show.
+            [void]$it.SubItems.Add((N $null))
+            [void]$it.SubItems.Add((N $null))
+            [void]$it.SubItems.Add((N $null))
+            [void]$it.SubItems.Add((N $null))
+        }
+        if (-not $answered) { $it.ForeColor = [System.Drawing.Color]::FromArgb(130, 130, 130) }
+        elseif ($u.avg -gt 110) { $it.ForeColor = [System.Drawing.Color]::FromArgb(180, 30, 30) }
+        elseif ($u.avg -gt 60) { $it.ForeColor = [System.Drawing.Color]::FromArgb(165, 105, 0) }
+        else { $it.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 60) }
+        [void]$lvProbe.Items.Add($it)
+    }
     $lvProbe.EndUpdate()
-    $rowsText = @($p.results | ForEach-Object { '{0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }) -join ' || '
+    $udpRows = @($p.udp | Where-Object { $null -ne $_ } | ForEach-Object {
+        if ($_.state -eq 'answered') { 'UDP {0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }
+        elseif ($_.state -eq 'closed') { 'UDP {0}: port closed, path {1} ms (not service latency)' -f $_.label, (N $_.pathMs) }
+        else { 'UDP {0}: no reply (not loss)' -f $_.label }
+    })
+    $rowsText = @(@($p.results | ForEach-Object { '{0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }) + $udpRows) -join ' || '
     Log ("probe grid: {0} rows | {1}" -f $lvProbe.Items.Count, $rowsText)
-    $lblProbeSummary.Text = ("game avg {0} ms | jitter {1} ms | loss {2}% | {3}/{4} reachable" -f (N $p.summary.gameAvgMs), (N $p.summary.gameJitter), (N $p.summary.gameLoss), $p.summary.reachable, $p.summary.endpoints)
+    $udpNote = ''
+    if ($null -ne $p.summary.udp) {
+        $uSum = $p.summary.udp
+        if ($uSum.answered -gt 0) { $udpNote = ' | UDP {0}/{1} answered, {2} ms' -f $uSum.answered, $uSum.targets, (N $uSum.serviceMs) }
+        elseif ($uSum.closed -gt 0) { $udpNote = ' | UDP no service reply ({0}/{1} port closed)' -f $uSum.closed, $uSum.targets }
+        else { $udpNote = ' | UDP unanswered, not loss' }
+    }
+    $lblProbeSummary.Text = (("game avg {0} ms | jitter {1} ms | loss {2}% | {3}/{4} reachable" -f (N $p.summary.gameAvgMs), (N $p.summary.gameJitter), (N $p.summary.gameLoss), $p.summary.reachable, $p.summary.endpoints) + $udpNote)
     if ($null -ne $p.summary.transport) {
         $t = $p.summary.transport
         if ($t.icmpAnswered -eq 0) { Log 'ICMP echo blocked; TCP figures stand alone' }
         elseif ($null -ne $t.gapMs -and [math]::Abs($t.gapMs) -ge 15) { Log ("TCP {0} ms vs ICMP {1} ms" -f $t.tcpMs, $t.icmpMs) }
+    }
+    # UDP figures exist only where a game service answered. A closed port is path evidence
+    # and silence is not loss, so neither is logged as a latency or loss number.
+    if ($null -ne $p.summary.udp) {
+        $u = $p.summary.udp
+        if ($u.answered -gt 0) { Log ("UDP {0}/{1} answered, avg {2} ms, worst loss {3}%" -f $u.answered, $u.targets, (N $u.serviceMs), (N $u.loss)) }
+        elseif ($u.closed -gt 0) { Log ("UDP no service reply; {0}/{1} port(s) closed, path {2} ms" -f $u.closed, $u.targets, (N $u.pathMs)) }
+        else { Log ("UDP unanswered on {0} endpoint(s); not counted as packet loss" -f $u.targets) }
     }
 }
 
@@ -811,6 +866,31 @@ function Refresh-State {
                 }
             } else {
                 Set-Status 'Ready.' 'good'
+            }
+        }
+        # The last before/after comparison and the last rollback are reported with the sentence the
+        # page and the terminal use, so "rolled back" means the same thing in all three. What was
+        # already in history when the window opened is not news: the first read only marks it seen.
+        $bench = $r.data.benchmark
+        if ($null -ne $bench) {
+            $revertId = if ($null -ne $bench.lastRevert) { [string]$bench.lastRevert.id } else { '' }
+            $compId = if ($null -ne $bench.latest) { [string]$bench.latest.id } else { '' }
+            if (-not $script:benchSeen) {
+                $script:benchSeen = $true
+                $script:reportedRevert = $revertId
+                $script:reportedComparison = $compId
+            } else {
+                if ($revertId -and $revertId -ne $script:reportedRevert) {
+                    $script:reportedRevert = $revertId
+                    Log ('rollback: ' + [string]$bench.lastRevert.summary)
+                    if (-not $bench.lastRevert.data.restored) {
+                        Set-Status ([string]$bench.lastRevert.summary) 'warn'
+                    }
+                }
+                if ($compId -and $compId -ne $script:reportedComparison) {
+                    $script:reportedComparison = $compId
+                    Log ('before/after: ' + [string]$bench.latest.summary)
+                }
             }
         }
         $script:catalog = $r.data.catalog
@@ -1017,6 +1097,7 @@ if ($started) {
     $timer.Start()
     Set-Status 'Reading system state...' 'info'
     $script:startupPending = $true
+    $script:benchSeen = $false
     Refresh-State
     Send-Cmd 'soakStatus' @{} {
         param($r)

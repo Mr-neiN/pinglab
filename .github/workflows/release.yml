@@ -61,29 +61,13 @@ jobs:
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "number=$($Matches[1])" >> $env:GITHUB_OUTPUT
 
-      - name: Check the app still parses
+      - name: Run every test suite
         shell: pwsh
+        # The suite list lives in scripts/run-tests.mjs, so a test added next to a fix is run
+        # here and in CI without being listed in two places.
         run: |
-          node --check pinglab.mjs
-          node lib/dns-verdict.test.mjs
-          node lib/audit.test.mjs
-          node lib/probe-math.test.mjs
-          node lib/report.test.mjs
-          node lib/bufferbloat.test.mjs
-          node lib/backups.test.mjs
-          node lib/db.test.mjs
-          node lib/db-warning.test.mjs
-          node lib/drift.test.mjs
-          node lib/state-cache.test.mjs
-          node lib/config.test.mjs
-          node lib/concurrency.test.mjs
-          node lib/elevation-channel.test.mjs
-          node lib/server-guards.test.mjs
-          node lib/api-input.test.mjs
-          node lib/api-hardening.test.mjs
-          node lib/wifi-band.test.mjs
-          node lib/paths.test.mjs
-          node lib/tweaks.test.mjs
+          node scripts/static-check.mjs
+          node scripts/run-tests.mjs
 
       - name: Install Inno Setup
         shell: pwsh
@@ -96,6 +80,50 @@ jobs:
         env:
           VERSION_NUMBER: ${{ steps.version.outputs.number }}
         run: ./installer/build.ps1 -Version $env:VERSION_NUMBER -RequireInstaller
+
+      # Signing is opt-in: without a certificate in the repository secrets the artifacts ship
+      # unsigned and this step says so instead of failing a release. When it does sign, the
+      # checksums are regenerated afterwards because signing changes the installer's bytes, and
+      # a signature that does not verify stops the release here rather than at the user.
+      - name: Sign the installer
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64)) {
+            Write-Host 'No signing certificate (SIGNING_PFX_BASE64); the release will be unsigned.'
+            exit 0
+          }
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $signtool = Get-ChildItem -Path (Join-Path $kits '*/x64/signtool.exe') -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe was not found in the Windows SDK on this runner.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          try {
+            [System.IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+            $signed = 0
+            Get-ChildItem -Path (Join-Path $PWD 'dist') -Filter 'PingLab-Setup-*.exe' | ForEach-Object {
+              & $signtool.FullName sign /f $pfx /p $env:SIGNING_PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($_.Name)" }
+              $signature = Get-AuthenticodeSignature $_.FullName
+              if ($signature.Status -ne 'Valid') { throw "$($_.Name) did not verify after signing: $($signature.Status)" }
+              Write-Host "signed: $($_.Name) ($($signature.SignerCertificate.Subject))"
+              $signed += 1
+            }
+            if ($signed -eq 0) { throw 'No installer in dist to sign.' }
+            # The published hashes have to describe the signed bytes, not the ones built a
+            # moment earlier, and be the file verify-release.ps1 then reads back. One script
+            # writes it for the build and for this step, so the two cannot drift apart.
+            & ./installer/write-checksums.ps1 -Dist (Join-Path $PWD 'dist')
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+      - name: Verify the artifacts match their checksums
+        shell: pwsh
+        # SHA256SUMS.txt has to describe the bytes actually being uploaded, not the ones the
+        # build meant to produce.
+        run: ./installer/verify-release.ps1
 
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2

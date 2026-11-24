@@ -1,0 +1,54 @@
+name: Windows CI
+
+# Every push to main and every pull request runs the whole suite on a real Windows runner.
+# That is the only runner these tests mean anything on: they drive PowerShell, netsh and the
+# registry through lib/ps-fake.mjs, and a Linux job would only prove that the pure modules
+# parse. Release tags already run the suite inside the release job; this covers the commits in
+# between, so a fix is checked before a release is cut instead of after.
+#
+# Actions are pinned to the commit their tag pointed at, like the release workflow: a tag can be
+# moved without any commit here, and this would then silently run different code.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes the run for the older one; the suite takes minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      # One script for the checks that need no fixture, so CI and `npm run lint` cannot drift:
+      # every .mjs/.js file parses, every PowerShell file parses, and every element id
+      # public/app.js looks up exists in public/index.html.
+      - name: Static checks
+        shell: pwsh
+        run: node scripts/static-check.mjs
+
+      # The same list `npm test` runs locally, so a suite cannot be listed in one place and
+      # forgotten in the other.
+      - name: Run every test suite
+        shell: pwsh
+        run: node scripts/run-tests.mjs
+
+      # Measured, not tightly gated: only a state read or probe many times slower than these
+      # ceilings fails the job, and the numbers are printed for the trend either way.
+      - name: API response times
+        shell: pwsh
+        run: node scripts/perf.mjs --check

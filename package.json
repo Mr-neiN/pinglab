@@ -6,7 +6,11 @@
   "description": "Local Windows gaming network doctor: measures latency, jitter, loss, bufferbloat, DNS and Wi-Fi quality, and applies only reversible fixes.",
   "scripts": {
     "dev": "node server.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "lint": "node scripts/static-check.mjs",
+    "perf": "node scripts/perf.mjs",
+    "verify": "npm run lint && npm test"
   },
   "engines": {
     "node": ">=22"

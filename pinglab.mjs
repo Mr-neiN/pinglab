@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { snapshot, dnsServers } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
-import { bloatVerdict, transportText, scanFreshnessText } from "./lib/report.mjs";
+import { bloatVerdict, transportText, udpText, scanFreshnessText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
@@ -121,6 +121,12 @@ async function refreshCore() {
     // A settings file that could not be used travels with the state, so the dashboard prints
     // it in the same sentence the page and the GUI use.
     configProblem: config.problem,
+    // The last before/after comparison and the last rollback, so a change can be reviewed and
+    // an undo reported here with the sentence the page shows - including what is still applied.
+    benchmark: {
+      latest: listRuns("benchmark", 1)[0] ?? null,
+      lastRevert: listRuns("benchmark-revert", 1)[0] ?? null,
+    },
     endpoints: config.endpoints,
     runs: listRuns(null, 12),
     soaks: listSoakRuns(6),
@@ -184,14 +190,14 @@ async function runProbe() {
   const endpoints = ui.core?.endpoints || DEFAULT_ENDPOINTS;
   ui.busy = "measuring latency…";
   ui.view = "probe";
-  const { results, icmp } = await probeOnce(endpoints, {
+  const { results, icmp, udp } = await probeOnce(endpoints, {
     onProgress: (endpoint) => {
       ui.busy = `measuring ${endpoint.label}…`;
     },
   });
-  const summary = summarizeProbe({ results, icmp });
-  saveRun("probe", `avg ${summary.gameAvgMs ?? "?"} ms, loss ${summary.gameLoss ?? "?"}%`, { results, icmp, summary });
-  ui.probe = { results, icmp, summary, previous: previousRun("probe"), at: Date.now() };
+  const summary = summarizeProbe({ results, icmp, udp });
+  saveRun("probe", `avg ${summary.gameAvgMs ?? "?"} ms, loss ${summary.gameLoss ?? "?"}%`, { results, icmp, udp, summary });
+  ui.probe = { results, icmp, udp, summary, previous: previousRun("probe"), at: Date.now() };
   ui.busy = null;
   say(`Probe done — game avg ${summary.gameAvgMs ?? "?"} ms.`, "good");
   ui.core = null;
@@ -457,6 +463,17 @@ function viewProbe(W) {
     const note = transportText(p.summary.transport);
     if (note) for (const line of wrapText(note, W - 4)) out.push(`  ${D}${line}${R}`);
   }
+  if (p.udp?.length) {
+    out.push("");
+    const rows = p.udp.map((u) => {
+      if (u.state === "answered") return `${u.label}: ${n1(u.avg)} ms · jitter ${n1(u.jitter)} ms · ${n0(u.loss)}% loss`;
+      if (u.state === "closed") return `${u.label}: port closed${u.pathMs === null ? "" : ` (path ${n1(u.pathMs)} ms)`}`;
+      return `${u.label}: no UDP reply`;
+    });
+    out.push(`  ${D}UDP (${p.udp.length} game endpoint${p.udp.length === 1 ? "" : "s"}): ${rows.join(" · ")}${R}`);
+    const note = udpText(p.summary.udp);
+    if (note) for (const line of wrapText(note, W - 4)) out.push(`  ${D}${line}${R}`);
+  }
   out.push(...bloatLines(W));
   if (p.previous) out.push(`  ${D}previous run: ${p.previous.summary}${R}`);
   return out;
@@ -615,6 +632,18 @@ function render() {
       lines.push(` ${i === 0 ? `${YEL}!${R}` : " "} ${YEL}${l}${R}`);
     });
   }
+  // Both are reported, not just the newer one: the rollback comes first because it is the
+  // newer event and says what is still applied, and the comparison it undid stays visible so
+  // "why was this rolled back" has an answer without a history command.
+  const bench = ui.core?.benchmark;
+  const benchLines = [];
+  if (bench?.lastRevert?.summary) benchLines.push({ mark: "↩", tone: YEL, text: bench.lastRevert.summary });
+  if (bench?.latest?.summary) benchLines.push({ mark: "⇄", tone: D, text: bench.latest.summary });
+  for (const item of benchLines) {
+    wrapText(item.text, W - 6).forEach((l, i) => {
+      lines.push(` ${i === 0 ? `${item.tone}${item.mark}${R}` : " "} ${item.tone}${l}${R}`);
+    });
+  }
   lines.push(` ${D}${TITLES[ui.view] || ""}${R}`);
   const body = (VIEWS[ui.view] || viewDash)(W).flatMap((entry) => String(entry).split("\n"));
   // A view taller than the window is clipped instead of being allowed to scroll the frame,
@@ -751,6 +780,8 @@ async function bridgeCommand(cmd, args = {}) {
         // The same reading /api/state gives the page, so the GUI's status row can report a
         // settings file that could not be used instead of starting from defaults silently.
         config: { problem: ui.core?.configProblem ?? null },
+        // And the same before/after and rollback words the page and the dashboard print.
+        benchmark: ui.core?.benchmark ?? null,
         runs: ui.core?.runs || [],
         soaks: ui.core?.soaks || [],
         soak: soakStatus(),

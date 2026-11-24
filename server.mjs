@@ -1,20 +1,30 @@
 import http from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, extname, normalize, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
+import {
+  BENCH,
+  analysePhase,
+  baselineExpired,
+  benchParams,
+  benchSentence,
+  compareBenchmark,
+  paramsKey,
+  revertSentence,
+} from "./lib/bench.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
 import { snapshot, wifi, dnsServers, routes } from "./lib/net.mjs";
 import { analyseWifi, wifiAdvice, scanWifi } from "./lib/wifi.mjs";
-import { dnsWinner, dnsVerdict, bloatVerdict, transportText, scanFreshnessText } from "./lib/report.mjs";
-import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions } from "./lib/tweaks.mjs";
+import { dnsWinner, dnsVerdict, bloatVerdict, transportText, udpText, scanFreshnessText } from "./lib/report.mjs";
+import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions, actionSpec } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { createStateCache } from "./lib/state-cache.mjs";
-import { TWEAKS, PRESETS, RISK, presetById } from "./lib/catalog.mjs";
+import { TWEAKS, PRESETS, RISK, presetById, tweakById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig } from "./lib/config.mjs";
-import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus } from "./lib/db.mjs";
+import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus, getRun } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, listSoakRuns, getSoakRun, compareSoaks, soakLabel } from "./lib/soak.mjs";
 import { openTarget } from "./lib/ps.mjs";
 import {
@@ -202,6 +212,12 @@ async function buildState() {
     endpoints: config.endpoints,
     resolvers: RESOLVERS,
     recentRuns: listRuns(null, 12),
+    // The last comparison and the last rollback travel with the state, so the GUI and the
+    // terminal print the same words the page shows rather than only a history row.
+    benchmark: {
+      latest: listRuns("benchmark", 1)[0] ?? null,
+      lastRevert: listRuns("benchmark-revert", 1)[0] ?? null,
+    },
     // Same catalog the TUI and the GUI render, so labels, trade-offs, risk levels and
     // preset contents cannot differ between surfaces.
     catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
@@ -213,6 +229,33 @@ const stateCache = createStateCache({
   ttlMs: STATE_TTL_MS,
   maxStaleMs: STATE_MAX_STALE_MS,
   onError: (err) => console.error("[pinglab] state refresh failed:", redact(err?.message || err)),
+});
+
+/* ------------------------------------------------- before/after benchmarking */
+
+/**
+ * Two measurements with exactly one change between them, split into two requests on purpose:
+ * the person chooses the change, and the server never applies a setting on its own. Only one
+ * baseline is pending at a time, because "which before does this after belong to" has to have
+ * one answer; a second capture replaces it and says so.
+ */
+let benchmarkPending = null;
+
+/** One phase: `BENCH.repeats` full probes with the same endpoints and sample count. */
+async function measurePhase(endpoints) {
+  const runs = [];
+  for (let i = 0; i < BENCH.repeats; i += 1) {
+    const probe = await runProbe(endpoints, { count: BENCH.count });
+    runs.push({ at: new Date().toISOString(), results: probe.results, summary: summarizeProbe(probe) });
+  }
+  return runs;
+}
+
+const benchPolicy = () => ({
+  repeats: BENCH.repeats,
+  minRepeats: BENCH.minRepeats,
+  count: BENCH.count,
+  floors: BENCH.floors,
 });
 
 const server = http.createServer(async (req, res) => {
@@ -286,6 +329,9 @@ const server = http.createServer(async (req, res) => {
         // The TCP-versus-ICMP sentence is computed once, from the summary every surface
         // already receives, rather than assembled again on the page.
         transport: transportText(summary.transport),
+        // Same rule for UDP: the sentence is computed once from the summary, so no surface
+        // can turn silence or a closed port into a latency or loss figure of its own.
+        udpNote: udpText(summary.udp),
         previous: previousRun("probe"),
       });
     }
@@ -327,6 +373,201 @@ const server = http.createServer(async (req, res) => {
       // The endpoint list is part of the state the page renders.
       stateCache.invalidate();
       return sendJson(res, 200, { ok: true, endpoints, previousProblem: previous.problem });
+    }
+
+    if (req.method === "GET" && path === "/api/benchmark") {
+      // The pending baseline and the stored comparisons, so a page reload can pick the workflow
+      // up and an old comparison can be read again without repeating the measurements.
+      const pending = benchmarkPending
+        ? {
+            id: benchmarkPending.id,
+            tweak: benchmarkPending.tweak,
+            label: benchmarkPending.label,
+            at: benchmarkPending.at,
+            params: benchmarkPending.params,
+            baseline: analysePhase(benchmarkPending.before),
+          }
+        : null;
+      return sendJson(res, 200, {
+        ok: true,
+        pending,
+        latest: listRuns("benchmark", 1)[0] ?? null,
+        recent: listRuns("benchmark", 5),
+        reverts: listRuns("benchmark-revert", 3),
+        policy: benchPolicy(),
+      });
+    }
+
+    if (req.method === "POST" && path === "/api/benchmark/baseline") {
+      const body = bodyObject(await readJson(req));
+      const tweakId = typeof body.tweak === "string" ? body.tweak : "";
+      const entry = tweakById(tweakId);
+      if (!entry) throw refuse("tweak must be one of PingLab's settings.");
+      // DNS changes lookup time, which this probe does not measure (it times handshakes and
+      // UDP to an already-resolved host). Claiming a verdict on it would be a lie, so the
+      // request is refused instead of measured and dismissed as noise.
+      if (tweakId === "dns") {
+        throw refuse("DNS has its own benchmark. This probe times handshakes and UDP, not lookups, so it cannot judge a resolver change.");
+      }
+
+      const config = await loadConfig();
+      const params = benchParams(config.endpoints, { repeats: BENCH.repeats, count: BENCH.count });
+      const before = await measurePhase(config.endpoints);
+      benchmarkPending = {
+        id: randomUUID(),
+        tweak: tweakId,
+        label: entry.label,
+        alias: (await routes())[0]?.alias || null,
+        at: new Date().toISOString(),
+        startedAt: Date.now(),
+        params,
+        before,
+        // How many changes PingLab had recorded when the baseline was taken: the finish step
+        // requires exactly one more, so a second tweak cannot be folded into the result.
+        tweakMark: listTweaks(1)[0]?.id ?? 0,
+      };
+      return sendJson(res, 200, {
+        ok: true,
+        id: benchmarkPending.id,
+        tweak: tweakId,
+        label: entry.label,
+        applyAction: entry.actions.apply,
+        params,
+        baseline: analysePhase(before),
+        policy: benchPolicy(),
+      });
+    }
+
+    if (req.method === "POST" && path === "/api/benchmark/finish") {
+      const body = bodyObject(await readJson(req));
+      const pending = benchmarkPending;
+      if (!pending) {
+        return sendJson(res, 409, { ok: false, error: "There is no baseline to compare. Capture one before changing anything." });
+      }
+      if (body.id !== pending.id) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "That baseline is no longer the active one, so this measurement would be compared with a different before-run.",
+        });
+      }
+      if (body.tweak !== pending.tweak) {
+        return sendJson(res, 409, { ok: false, error: "The measurement belongs to a different setting than the one benchmarked." });
+      }
+      if (baselineExpired(pending.startedAt)) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: `The baseline was taken more than ${Math.round(BENCH.maxAgeMs / 60000)} minutes ago, so the line may no longer be in the same condition. Capture a fresh baseline.`,
+        });
+      }
+
+      const config = await loadConfig();
+      const current = benchParams(config.endpoints, { repeats: BENCH.repeats, count: BENCH.count });
+      if (paramsKey(current) !== paramsKey(pending.params)) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "The endpoint list changed since the baseline, so the two runs would not measure the same targets. Capture a new baseline.",
+        });
+      }
+
+      const changes = listTweaks(50).filter((t) => t.id > pending.tweakMark);
+      if (changes.length !== 1) {
+        return sendJson(res, 409, {
+          ok: false,
+          error:
+            changes.length === 0
+              ? "Nothing was changed between the two measurements. Apply exactly one setting, then measure again."
+              : `${changes.length} settings were changed between the measurements, so a difference could not be attributed to one of them. Capture a new baseline and change exactly one setting.`,
+        });
+      }
+      const applied = changes[0];
+      const spec = actionSpec(applied.action);
+      if (spec.mode !== "apply" || spec.id !== pending.tweak) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: `The change recorded since the baseline was "${applied.action}", not the apply step of ${pending.label}.`,
+        });
+      }
+
+      const after = await measurePhase(config.endpoints);
+      const result = compareBenchmark({
+        before: pending.before,
+        after,
+        beforeParams: pending.params,
+        afterParams: current,
+      });
+      const sentence = benchSentence(result, { label: pending.label });
+      const id = saveRun("benchmark", sentence, {
+        tweak: pending.tweak,
+        label: pending.label,
+        alias: pending.alias,
+        params: pending.params,
+        before: pending.before,
+        after,
+        result,
+        baselineAt: pending.at,
+        finishedAt: new Date().toISOString(),
+      });
+      benchmarkPending = null;
+      stateCache.invalidate();
+      return sendJson(res, 200, {
+        ok: true,
+        id,
+        tweak: pending.tweak,
+        label: pending.label,
+        result,
+        sentence,
+        revertAction: tweakById(pending.tweak)?.actions?.revert ?? null,
+        policy: benchPolicy(),
+      });
+    }
+
+    if (req.method === "POST" && path === "/api/benchmark/revert") {
+      const body = bodyObject(await readJson(req));
+      // The approval is this flag, sent only after the person confirms in the page. No code path
+      // rolls a setting back because a comparison happened to regress.
+      if (body.approve !== true) throw refuse("Rolling back a setting needs an explicit approval.");
+      const id = Number(body.id);
+      if (!Number.isInteger(id) || id <= 0) throw refuse("id must be the recorded comparison to roll back.");
+      const run = getRun(id);
+      if (!run || run.kind !== "benchmark") return sendJson(res, 404, { ok: false, error: "No such comparison." });
+
+      const tweakId = run.data?.tweak;
+      const entry = tweakById(tweakId);
+      const revertAction = entry?.actions?.revert;
+      if (!revertAction) throw refuse("That comparison has no setting to roll back.");
+      const alias = run.data?.alias || (await routes())[0]?.alias || null;
+
+      // The same dispatch table every other undo uses, so the restore point, the read-back and
+      // the sentence are the ones the GUI and the terminal already show for that setting.
+      const outcome = await runTweakAction(alias, revertAction);
+      const message = tweakOutcome(outcome).message;
+      const restored = Boolean(outcome.ok);
+      const pending = pendingTweaks();
+      // One sentence for every surface: what happened, and what is still not back the way it
+      // was. The count includes this setting when the rollback failed, which is exactly what
+      // the user needs to know.
+      const sentence = revertSentence({ label: entry.label, restored, message, stillPending: pending.count });
+      saveRun("benchmark-revert", sentence, {
+        comparisonId: id,
+        tweak: tweakId,
+        restored,
+        message,
+        sentence,
+        data: outcome.data ?? null,
+        // What PingLab still has on record as changed, so "not restored" is not left implicit.
+        stillPending: pending.count,
+        pendingProblem: pending.problem,
+      });
+      stateCache.invalidate();
+      return sendJson(res, 200, {
+        ok: restored,
+        restored,
+        message,
+        sentence,
+        data: outcome.data ?? null,
+        tweakState: alias ? await tweakState(alias) : null,
+        pending,
+      });
     }
 
     if (req.method === "POST" && path === "/api/wifi-scan") {

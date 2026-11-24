@@ -95,14 +95,8 @@ if (-not $SkipInstaller) {
     }
 }
 
+# One writer for the format, shared with the release workflow's post-signing step: two
+# copies of this rule is how a signed installer ends up with a hash of its unsigned bytes.
+& (Join-Path $PSScriptRoot "write-checksums.ps1") -Dist $dist
 $artifacts = Get-ChildItem $dist -File | Where-Object { $_.Extension -in ".zip", ".exe" } | Sort-Object Name
-$sums = foreach ($file in $artifacts) {
-    $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    "$hash  $($file.Name)"
-}
-# LF, no BOM: `sha256sum -c` on Linux/macOS reads a trailing CR as part of the filename and
-# reports every published file as missing.
-$sumsPath = Join-Path $dist "SHA256SUMS.txt"
-[System.IO.File]::WriteAllText($sumsPath, (($sums -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding $false))
-Write-Host "checksums:    $sumsPath"
 $artifacts | ForEach-Object { "{0,-38} {1,8:N1} KB" -f $_.Name, ($_.Length / 1KB) }
