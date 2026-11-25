@@ -41,7 +41,7 @@
       <div class="grid">
         <section class="card card-wide">
           <header class="card-head">
-            <h2>Latency &amp; loss <span class="hint">Game-server RTT (the game's own UDP query) next to network-path RTT (TCP handshake, ICMP cross-check) — only a service that answers can be timed</span></h2>
+            <h2>Latency &amp; loss <span class="hint">Game-server RTT (the game's own UDP query) next to network-path RTT (TCP handshake, ICMP cross-check) — a query round trip, not in-game ping; only a service that answers can be timed</span></h2>
             <button id="runProbe" class="btn">Test latency</button>
           </header>
           <div id="probeMeta" class="meta">Idle.</div>
@@ -177,6 +177,10 @@
     </main>
 
     <div id="toast" class="toast hidden"></div>
+    <script src="/core.js"></script>
+    <script src="/probe-view.js"></script>
+    <script src="/fixes-view.js"></script>
+    <script src="/bench-view.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

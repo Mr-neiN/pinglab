@@ -56,6 +56,14 @@ console.log(`  ${scripts.length} JavaScript file(s) parse`);
 
 const psFiles = [join(ROOT, "PingLab.ps1")];
 try {
+  // The WinForms entry point loads these; each one has to parse on its own too.
+  for (const entry of readdirSync(join(ROOT, "gui"))) {
+    if (entry.toLowerCase().endsWith(".ps1")) psFiles.push(join(ROOT, "gui", entry));
+  }
+} catch {
+  // No gui folder is not a failure of the code that is here.
+}
+try {
   for (const entry of readdirSync(join(ROOT, "installer"))) {
     if (entry.toLowerCase().endsWith(".ps1")) psFiles.push(join(ROOT, "installer", entry));
   }
@@ -87,12 +95,16 @@ if (!powershell) {
 
 console.log("wiring");
 const page = readFileSync(join(ROOT, "public", "index.html"), "utf8");
-const app = readFileSync(join(ROOT, "public", "app.js"), "utf8");
+// The page is built from several scripts, loaded in this order. Wiring is checked across all
+// of them, because an id looked up in any of them is just as dead when it is renamed.
+const app = ["core.js", "probe-view.js", "fixes-view.js", "bench-view.js", "app.js"]
+  .map((name) => readFileSync(join(ROOT, "public", name), "utf8"))
+  .join("\n");
 const defined = new Set([...page.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
 const looked = new Set([...app.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]));
 const missing = [...looked].filter((id) => !defined.has(id)).sort();
 if (missing.length) {
-  fail(`public/app.js looks up id(s) that public/index.html does not define: ${missing.join(", ")}`);
+  fail(`public/*.js looks up id(s) that public/index.html does not define: ${missing.join(", ")}`);
 } else {
   console.log(`  ${looked.size} element id(s) looked up, all defined in public/index.html`);
 }

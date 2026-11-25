@@ -1,10 +1,10 @@
 import http from "node:http";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join, extname, normalize, relative, isAbsolute } from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runProbe, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
+import { runProbe, summarizeProbe, UDP_POLICY } from "./lib/probe.mjs";
+import { bufferbloat } from "./lib/bufferbloat.mjs";
 import {
   BENCH,
   analysePhase,
@@ -15,20 +15,37 @@ import {
   paramsKey,
   revertSentence,
 } from "./lib/bench.mjs";
-import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
+import { benchmark as dnsBenchmark } from "./lib/dns.mjs";
 import { snapshot, adapters, wifi, dnsServers, routes } from "./lib/net.mjs";
 import { analyseWifi, wifiAdvice, scanWifi } from "./lib/wifi.mjs";
-import { dnsWinner, dnsVerdict, bloatVerdict, transportText, udpText, scanFreshnessText } from "./lib/report.mjs";
+import {
+  dnsWinner,
+  dnsVerdict,
+  bloatVerdict,
+  transportText,
+  udpText,
+  udpCaveatText,
+  scanFreshnessText,
+} from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions, actionSpec } from "./lib/tweaks.mjs";
-import { driftStatus } from "./lib/drift.mjs";
 import { probeTrend } from "./lib/trend.mjs";
 import { createStateCache } from "./lib/state-cache.mjs";
-import { checkForUpdate, currentVersion } from "./lib/update.mjs";
-import { UDP_PROTOCOLS } from "./lib/udp-proto.mjs";
-import { TWEAKS, PRESETS, RISK, presetById, tweakById } from "./lib/catalog.mjs";
+import { buildState, benchPolicy } from "./lib/app-state.mjs";
+import {
+  redact,
+  securityHeaders,
+  sendJson,
+  sendText,
+  fail,
+  tokenMatches,
+  isJson,
+  readJson,
+} from "./lib/http.mjs";
+import { serveStatic } from "./lib/static-site.mjs";
+import { checkForUpdate } from "./lib/update.mjs";
+import { presetById, tweakById } from "./lib/catalog.mjs";
 import { loadConfig, saveConfig, saveAdapter } from "./lib/config.mjs";
-import { adapterChoices } from "./lib/target.mjs";
-import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus, getRun } from "./lib/db.mjs";
+import { saveRun, listRuns, saveTweak, listTweaks, previousRun, getRun } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, listSoakRuns, getSoakRun, compareSoaks, soakLabel } from "./lib/soak.mjs";
 import { openTarget } from "./lib/ps.mjs";
 import {
@@ -70,199 +87,16 @@ const STATE_MAX_STALE_MS =
  * belongs to.
  */
 const TOKEN = randomBytes(32).toString("base64url");
-const TOKEN_HEADER = "x-pinglab-token";
 
 /** The only names this server answers to. Anything else is DNS rebinding. */
 const HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`, `http://[::1]:${PORT}`]);
 
-/** Never let the run's token reach a log line, even inside an error message. */
-function redact(value) {
-  return String(value).split(TOKEN).join("[token]");
-}
-
-/** Headers every response carries, static files and JSON alike. */
-function securityHeaders(contentType) {
-  return {
-    ...(contentType ? { "Content-Type": contentType } : {}),
-    "Cache-Control": "no-store",
-    // The page needs no inline script and loads nothing from another origin. Inline style
-    // attributes are how the bar widths are drawn, so styles alone allow them.
-    "Content-Security-Policy":
-      "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Cross-Origin-Resource-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
-  };
-}
-
-function sendJson(res, status, payload) {
-  const body = JSON.stringify(payload);
-  res.writeHead(status, {
-    ...securityHeaders("application/json; charset=utf-8"),
-    "Content-Length": Buffer.byteLength(body),
-  });
-  res.end(body);
-}
-
-function sendText(res, status, text) {
-  res.writeHead(status, securityHeaders("text/plain; charset=utf-8"));
-  res.end(text);
-}
-
-function fail(res, status, error) {
-  sendJson(res, status, { ok: false, error });
-}
-
-/** Constant-time comparison, so the token cannot be guessed a character at a time. */
-function tokenMatches(req) {
-  const given = req.headers[TOKEN_HEADER];
-  if (typeof given !== "string" || given.length !== TOKEN.length) return false;
-  return timingSafeEqual(Buffer.from(given), Buffer.from(TOKEN));
-}
-
-/** A state-changing request has to be JSON, which is what a form post cannot send. */
-function isJson(req) {
-  return String(req.headers["content-type"] || "").toLowerCase().split(";")[0].trim() === "application/json";
-}
-
-/**
- * Read a JSON object, or refuse it. Every failure here is the caller's, so it carries a
- * status and a fixed sentence: a parser message quotes the input it could not read, and an
- * error body is the last place a request's contents should appear.
- */
-async function readJson(req, { limit = 2 * 1024 * 1024 } = {}) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > limit) throw new HttpError(413, "The request body is larger than 2 MB.");
-    chunks.push(chunk);
-  }
-  if (!chunks.length) return {};
-  let parsed;
-  try {
-    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new HttpError(400, "The request body is not valid JSON.");
-  }
-  return bodyObject(parsed);
-}
-
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".png": "image/png",
-};
-
-async function serveStatic(res, urlPath) {
-  const rel = normalize(urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, ""));
-  if (rel.includes("..") || isAbsolute(rel)) return sendText(res, 403, "Forbidden");
-  const file = join(PUBLIC_DIR, rel);
-  // The joined path must still sit under public/. The check above refuses dot segments; this
-  // refuses anything the platform might interpret differently (a drive, a UNC share).
-  const back = relative(PUBLIC_DIR, file);
-  if (back.startsWith("..") || isAbsolute(back)) return sendText(res, 403, "Forbidden");
-  try {
-    const data = await readFile(file);
-    if (rel === "index.html") {
-      // The page learns the token here and nowhere else; nothing else is injected.
-      const html = data.toString("utf8");
-      const tagged = html.includes("</head>")
-        ? html.replace("</head>", `    <meta name="pinglab-token" content="${TOKEN}" />\n  </head>`)
-        : html;
-      res.writeHead(200, securityHeaders(MIME[".html"]));
-      res.end(tagged);
-      return;
-    }
-    res.writeHead(200, securityHeaders(MIME[extname(file).toLowerCase()] || "application/octet-stream"));
-    res.end(data);
-  } catch {
-    sendText(res, 404, "Not found");
-  }
-}
-
-/**
- * Everything GET /api/state answers with, assembled once. The cache owns when it is called;
- * keeping the assembly here means the route and any test see the same shape.
- */
-async function buildState() {
-  const config = await loadConfig();
-  const connection = await snapshot();
-  // Which adapter the settings are aimed at is a persisted choice, not an inference: the rows,
-  // the restore points and every apply read the same answer, so a docked laptop or a VPN cannot
-  // have one surface tuning Wi-Fi while another says it is tuning Ethernet.
-  const pick = adapterChoices({
-    adapters: connection.adapters,
-    routes: connection.routes,
-    activeRoute: connection.activeRoute,
-    chosen: config.adapter,
-  });
-  const alias = pick.target?.alias || null;
-  const dnsForTarget = alias ? connection.dns.find((d) => d.alias === alias) || null : null;
-  const [tw, tweaks] = await Promise.all([
-    alias ? tweakState(alias, { dns: connection.dns }) : Promise.resolve(null),
-    Promise.resolve(pendingTweaks()),
-  ]);
-  return {
-    // The version this copy actually runs as, read from package.json beside it. The page shows
-    // it, so a copy that was upgraded (or one that was not) is visible instead of inferred,
-    // and it is the same value the update check compares against the newest release.
-    version: currentVersion(),
-    // The benchmark policy, so a surface can say how many repeats a phase takes without
-    // keeping a second copy of the number that can drift from lib/bench.mjs.
-    benchPolicy: benchPolicy(),
-    connection: { ...connection, dnsForTarget },
-    // The adapter every setting below is read from and written to, and the list a picker may
-    // offer. The default route is marked on it; a virtual adapter is offered but never picked
-    // on its own (lib/target.mjs), and `fallback` explains a remembered adapter that is gone.
-    target: pick.target,
-    adapterChoices: pick.choices,
-    targetFallback: pick.fallback,
-    tweakState: tw,
-    pending: tweaks,
-    // A change PingLab made that Windows has since put back travels with the state, so the
-    // page can say it above the rows instead of leaving it to be noticed.
-    drift: driftStatus(tw),
-    // A database that had to be set aside during start-up is not a silent reset: the page
-    // says so above the verdict, the way the GUI says it in its status row.
-    history: dbStatus(),
-    // A settings file that could not be used is reported the same way, once, in the state
-    // every surface draws: the page above the verdict, the GUI in its status row.
-    config: { problem: config.problem },
-    endpoints: config.endpoints,
-    resolvers: RESOLVERS,
-    recentRuns: listRuns(null, 12),
-    // Long-term latency and jitter from the stored probe runs - the same history the page's
-    // "previous run" figure comes from, read back as a series instead of one comparison.
-    trend: probeTrend(listRuns("probe", 60)),
-    // The last comparison and the last rollback travel with the state, so the GUI and the
-    // terminal print the same words the page shows rather than only a history row.
-    benchmark: {
-      latest: listRuns("benchmark", 1)[0] ?? null,
-      lastRevert: listRuns("benchmark-revert", 1)[0] ?? null,
-    },
-    // Same catalog the TUI and the GUI render, so labels, trade-offs, risk levels and
-    // preset contents cannot differ between surfaces.
-    catalog: { tweaks: TWEAKS, presets: PRESETS, risk: RISK },
-    // The UDP queries an endpoint may name, from the engine's own registry: the page's editor
-    // cannot offer a protocol the server would refuse, or miss one it accepts.
-    protocols: Object.values(UDP_PROTOCOLS).map(({ id, label, describe }) => ({ id, label, describe })),
-  };
-}
-
 const stateCache = createStateCache({
   load: buildState,
   ttlMs: STATE_TTL_MS,
   maxStaleMs: STATE_MAX_STALE_MS,
-  onError: (err) => console.error("[pinglab] state refresh failed:", redact(err?.message || err)),
+  onError: (err) => console.error("[pinglab] state refresh failed:", redact(err?.message || err, TOKEN)),
 });
 
 /* ------------------------------------------------- before/after benchmarking */
@@ -292,13 +126,6 @@ async function measurePhase(endpoints) {
   return runs;
 }
 
-const benchPolicy = () => ({
-  repeats: BENCH.repeats,
-  minRepeats: BENCH.minRepeats,
-  count: BENCH.count,
-  floors: BENCH.floors,
-});
-
 const server = http.createServer(async (req, res) => {
   // A Host that is not one of this machine's loopback names means someone pointed their own
   // domain at 127.0.0.1 to read the page (and its token) as their own origin. Refuse before
@@ -311,13 +138,13 @@ const server = http.createServer(async (req, res) => {
   const path = url.pathname;
 
   if (!path.startsWith("/api/")) {
-    if (req.method === "GET") return serveStatic(res, path);
+    if (req.method === "GET") return serveStatic(res, path, { publicDir: PUBLIC_DIR, token: TOKEN });
     return sendText(res, 405, "Method not allowed");
   }
 
   // Every API call has to come from this run's page: it holds the token, a form post from
   // another site does not, and a same-origin fetch is the only way to present it.
-  if (!tokenMatches(req)) {
+  if (!tokenMatches(req, TOKEN)) {
     return fail(res, 403, "This server only answers the PingLab page it just served. Reload the page and try again.");
   }
   if (req.method !== "GET" && req.method !== "POST") {
@@ -375,6 +202,7 @@ const server = http.createServer(async (req, res) => {
         // Same rule for UDP: the sentence is computed once from the summary, so no surface
         // can turn silence or a closed port into a latency or loss figure of its own.
         udpNote: udpText(summary.udp),
+        udpCaveat: udpCaveatText(UDP_POLICY),
         previous: previousRun("probe"),
       });
     }
@@ -767,7 +595,7 @@ const server = http.createServer(async (req, res) => {
     // A refusal names the field it rejected and is safe to show. Anything else is ours: the
     // log gets it (with the token redacted), the page gets a sentence without internals.
     if (err instanceof HttpError) return fail(res, err.status, err.message);
-    console.error("[pinglab]", redact(err?.stack || err));
+    console.error("[pinglab]", redact(err?.stack || err, TOKEN));
     return fail(
       res,
       500,

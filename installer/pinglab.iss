@@ -52,6 +52,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "..\pinglab.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\server.mjs"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\PingLab.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\gui\*.ps1"; DestDir: "{app}\gui"; Flags: ignoreversion
 Source: "..\PingLab.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\PingLab-TUI.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\package.json"; DestDir: "{app}"; Flags: ignoreversion

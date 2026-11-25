@@ -53,6 +53,7 @@ $items = @(
     "pinglab.mjs",
     "server.mjs",
     "PingLab.ps1",
+    "gui",
     "PingLab.cmd",
     "PingLab-TUI.cmd",
     "package.json",
