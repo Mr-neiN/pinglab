@@ -61,7 +61,9 @@ $script:proc.StartInfo = $psi
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'PingLab - network doctor'
-$form.Size = New-Object System.Drawing.Size(960, 680)
+# Tall enough for the Fixes tab to show its own restore points below the buttons; anything
+# shorter scrolls that tab rather than clipping them.
+$form.Size = New-Object System.Drawing.Size(960, 820)
 $form.MinimumSize = New-Object System.Drawing.Size(820, 560)
 $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
@@ -206,17 +208,23 @@ $tabFixes = New-Tab 'Fixes'
 $tlpFixes = New-Object System.Windows.Forms.TableLayoutPanel
 $tlpFixes.Dock = 'Fill'
 $tlpFixes.ColumnCount = 3
-$tlpFixes.RowCount = 8
+$tlpFixes.RowCount = 10
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 300)))
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
 [void]$tlpFixes.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 160)))
 for ($i = 0; $i -lt 6; $i++) {
     [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 74)))
 }
-# One row above the settings for the drift sentence: a setting PingLab wrote that Windows has
-# since put back is the one thing the rows themselves cannot show.
+# Which adapter the rows below read and write, above them because it scopes all of them.
+[void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 58)))
+# Then the drift sentence: a setting PingLab wrote that Windows has since put back is the one
+# thing the rows themselves cannot show.
 [void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 34)))
-[void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+# The preset/restore buttons, then the restore points they would put back and on which adapter.
+[void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 46)))
+# The restore-point list, kept reachable by scrolling on a screen too short to show it.
+[void]$tlpFixes.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 165)))
+$tlpFixes.AutoScroll = $true
 
 $fixTip = New-Object System.Windows.Forms.ToolTip
 $fixTip.AutoPopDelay = 30000
@@ -285,6 +293,56 @@ $rowOrder = New-FixRow 4 'Wi-Fi auto-connect order' 'netsh wlan show profiles or
 $rowDns = New-FixRow 5 'DNS servers' 'Benchmark the resolvers PingLab knows, or hand the adapter back to your router.' 'Automatic'
 $rowDns.Button.Text = 'Benchmark'
 
+# ------------------------------------------------- adapter the settings target
+# Which adapter the rows are read from and written to, chosen once and saved by the engine
+# (bridge command `adapter`, the same path /api/adapter uses), so every Fixes row, the drift
+# sentence, the DNS-in-use line and the restore points below describe that adapter.
+
+$tlpAdapterRow = New-Object System.Windows.Forms.TableLayoutPanel
+$tlpAdapterRow.Dock = 'Fill'
+$tlpAdapterRow.ColumnCount = 3
+$tlpAdapterRow.RowCount = 2
+[void]$tlpAdapterRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 112)))
+[void]$tlpAdapterRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, 330)))
+[void]$tlpAdapterRow.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$tlpAdapterRow.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 28)))
+[void]$tlpAdapterRow.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 28)))
+
+$lblAdapterTitle = New-Object System.Windows.Forms.Label
+$lblAdapterTitle.Text = 'Settings apply to'
+$lblAdapterTitle.AutoSize = $true
+$lblAdapterTitle.TextAlign = 'MiddleLeft'
+$lblAdapterTitle.Margin = New-Object System.Windows.Forms.Padding(0, 8, 6, 0)
+
+$cmbAdapter = New-Object System.Windows.Forms.ComboBox
+$cmbAdapter.DropDownStyle = 'DropDownList'
+$cmbAdapter.Dock = 'Fill'
+$cmbAdapter.Margin = New-Object System.Windows.Forms.Padding(0, 4, 8, 4)
+
+$chkVirtual = New-Object System.Windows.Forms.CheckBox
+$chkVirtual.Text = 'show virtual / VPN adapters'
+$chkVirtual.AutoSize = $true
+$chkVirtual.Margin = New-Object System.Windows.Forms.Padding(0, 7, 6, 0)
+
+# The same sentences the page and the terminal print for a VPN on the default route and for a
+# remembered adapter that has left the machine.
+$lblAdapterNote = New-Object System.Windows.Forms.Label
+$lblAdapterNote.AutoSize = $false
+$lblAdapterNote.AutoEllipsis = $true
+$lblAdapterNote.Dock = 'Fill'
+$lblAdapterNote.TextAlign = 'MiddleLeft'
+$lblAdapterNote.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+$lblAdapterNote.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
+$lblAdapterNote.Margin = New-Object System.Windows.Forms.Padding(0)
+
+$tlpAdapterRow.Controls.Add($lblAdapterTitle, 0, 0)
+$tlpAdapterRow.Controls.Add($cmbAdapter, 1, 0)
+$tlpAdapterRow.Controls.Add($chkVirtual, 2, 0)
+$tlpAdapterRow.Controls.Add($lblAdapterNote, 0, 1)
+$tlpAdapterRow.SetColumnSpan($lblAdapterNote, 3)
+$tlpFixes.Controls.Add($tlpAdapterRow, 0, 6)
+$tlpFixes.SetColumnSpan($tlpAdapterRow, 3)
+
 $lblDrift = New-Object System.Windows.Forms.Label
 $lblDrift.Dock = 'Fill'
 $lblDrift.AutoSize = $false
@@ -293,7 +351,7 @@ $lblDrift.TextAlign = 'MiddleLeft'
 $lblDrift.ForeColor = [System.Drawing.Color]::FromArgb(165, 105, 0)
 $lblDrift.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 $lblDrift.Margin = New-Object System.Windows.Forms.Padding(0, 6, 8, 0)
-$tlpFixes.Controls.Add($lblDrift, 0, 6)
+$tlpFixes.Controls.Add($lblDrift, 0, 7)
 $tlpFixes.SetColumnSpan($lblDrift, 3)
 
 $panelRestore = New-Object System.Windows.Forms.Panel
@@ -311,8 +369,29 @@ $btnRestore = New-Button 'Restore everything PingLab changed' 300
 $btnRestore.Location = New-Object System.Drawing.Point(416, 12)
 $btnRestore.BackColor = [System.Drawing.Color]::FromArgb(252, 236, 236)
 $panelRestore.Controls.Add($btnRestore)
-$tlpFixes.Controls.Add($panelRestore, 0, 7)
+$tlpFixes.Controls.Add($panelRestore, 0, 8)
 $tlpFixes.SetColumnSpan($panelRestore, 3)
+
+# The restore points, each with the adapter it belongs to: undoing a change is never a guess
+# about which device it was written to.
+$tlpRestorePoints = New-Object System.Windows.Forms.TableLayoutPanel
+$tlpRestorePoints.Dock = 'Fill'
+$tlpRestorePoints.ColumnCount = 1
+$tlpRestorePoints.RowCount = 2
+[void]$tlpRestorePoints.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 22)))
+[void]$tlpRestorePoints.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+
+$lblRestorePoints = New-Object System.Windows.Forms.Label
+$lblRestorePoints.Text = 'Restore points - what each active change can put back, and which adapter it was written to.'
+$lblRestorePoints.AutoSize = $true
+$lblRestorePoints.ForeColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+$lblRestorePoints.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+
+$lvRestore = New-Grid @('Setting', 'Adapter', 'Restored to', 'When') @(240, 150, 300, 90)
+$tlpRestorePoints.Controls.Add($lblRestorePoints, 0, 0)
+$tlpRestorePoints.Controls.Add($lvRestore, 0, 1)
+$tlpFixes.Controls.Add($tlpRestorePoints, 0, 9)
+$tlpFixes.SetColumnSpan($tlpRestorePoints, 3)
 $tabFixes.Controls.Add($tlpFixes)
 [void]$tabs.TabPages.Add($tabFixes)
 
@@ -448,8 +527,122 @@ $script:lastTweak = $null
 # The tweak catalog (lib/catalog.mjs) arrives with every state refresh; the Fixes tab uses
 # it for the risk tag, the stock value and the tooltip, so its words match the TUI and web.
 $script:catalog = $null
+# Which adapter the rows below change; set from every state refresh, so a tooltip always names
+# the device an apply would write to.
+$script:targetAlias = $null
+# The picker's own state: the served choices, the items currently shown (index-aligned, so the
+# selection handler never has to parse a display string), the note under it, the virtual toggle,
+# and a guard so filling the list cannot look like a user choosing from it.
+$script:adapterChoices = @()
+$script:adapterItems = @()
+$script:adapterNote = ''
+$script:showVirtual = $false
+$script:fillingAdapter = $false
 $script:soakRunning = $false
 $script:lastProgressLog = -1
+
+function New-AdapterItemText($c) {
+    $tags = @()
+    if ($c.defaultRoute) { $tags += 'default route' }
+    if ($c.virtual) { $tags += 'virtual / VPN' }
+    if ($c.status -and $c.status -ne 'Up') { $tags += [string]$c.status }
+    $text = [string]$c.alias
+    if ($c.description) { $text += ' - ' + [string]$c.description }
+    if ($tags.Count -gt 0) { $text += ' (' + ($tags -join ', ') + ')' }
+    return $text
+}
+
+# Physical adapters are always offered; a virtual or VPN one only once the box is ticked, or
+# when it is already the target (so a saved choice is never hidden from its own picker).
+function Set-AdapterPickerItems {
+    $script:fillingAdapter = $true
+    try {
+        $cmbAdapter.BeginUpdate()
+        try {
+            $cmbAdapter.Items.Clear()
+            $script:adapterItems = @()
+            foreach ($c in @($script:adapterChoices)) {
+                if ($null -eq $c) { continue }
+                $isTarget = ([string]$c.alias -eq [string]$script:targetAlias)
+                if ($c.virtual -and -not $script:showVirtual -and -not $isTarget) { continue }
+                [void]$cmbAdapter.Items.Add((New-AdapterItemText $c))
+                $script:adapterItems += [pscustomobject]@{ alias = [string]$c.alias }
+            }
+            $index = -1
+            for ($i = 0; $i -lt $script:adapterItems.Count; $i++) {
+                if ($script:adapterItems[$i].alias -eq [string]$script:targetAlias) { $index = $i; break }
+            }
+            if ($index -lt 0 -and $cmbAdapter.Items.Count -gt 0) { $index = 0 }
+            if ($index -ge 0) { $cmbAdapter.SelectedIndex = $index }
+        } finally {
+            $cmbAdapter.EndUpdate()
+        }
+    } finally {
+        $script:fillingAdapter = $false
+    }
+}
+
+function Update-RestorePoints($pending) {
+    $lvRestore.BeginUpdate()
+    try {
+        $lvRestore.Items.Clear()
+        if ($null -ne $pending -and $null -ne $pending.problem) {
+            $bad = New-Object System.Windows.Forms.ListViewItem('restore points unreadable')
+            [void]$bad.SubItems.Add('')
+            [void]$bad.SubItems.Add([string]$pending.problem.message)
+            [void]$bad.SubItems.Add('')
+            [void]$lvRestore.Items.Add($bad)
+            return
+        }
+        foreach ($it in @($pending.items)) {
+            if ($null -eq $it) { continue }
+            $row = New-Object System.Windows.Forms.ListViewItem([string]$it.label)
+            [void]$row.SubItems.Add([string]$it.alias)
+            [void]$row.SubItems.Add([string]$it.restoreWillSet)
+            $when = ''
+            try { $when = ([datetime]$it.at).ToLocalTime().ToString('HH:mm') } catch { $when = [string]$it.at }
+            [void]$row.SubItems.Add($when)
+            [void]$lvRestore.Items.Add($row)
+        }
+    } finally {
+        $lvRestore.EndUpdate()
+    }
+}
+
+function Update-AdapterPicker($d) {
+    $script:targetAlias = if ($null -ne $d.target) { [string]$d.target.alias } else { $null }
+    $script:adapterChoices = @($d.adapterChoices)
+    $note = @()
+    if ($null -ne $d.target -and $d.target.note) { $note += [string]$d.target.note }
+    if ($d.targetFallback) { $note += [string]$d.targetFallback }
+    $script:adapterNote = ($note -join ' ')
+    Set-AdapterPickerItems
+    $lblAdapterNote.Text = $script:adapterNote
+    $fixTip.SetToolTip($lblAdapterNote, $script:adapterNote)
+}
+
+# The one write path: the engine validates the name against the machine, saves it the same way
+# `node pinglab.mjs --adapter` and POST /api/adapter do, and answers with the re-read state.
+function Set-TargetAdapter([string]$alias) {
+    if ([string]::IsNullOrWhiteSpace($alias)) { return }
+    if ($alias -eq [string]$script:targetAlias) { return }
+    Set-Status ("Aiming the settings at $alias...") 'info'
+    Send-Cmd 'adapter' @{ alias = $alias } {
+        param($r)
+        if (-not $r.ok) {
+            Set-Status ('Adapter not changed: ' + $r.error) 'bad'
+            # The saved choice is untouched, so put the picker back on it rather than showing
+            # a device the engine refused.
+            Set-AdapterPickerItems
+            return
+        }
+        $script:targetAlias = [string]$r.data.target.alias
+        Set-Status ("Settings now apply to $($script:targetAlias).") 'good'
+        # Rows, drift, the DNS-in-use line and the restore points all come from one state read,
+        # so this redraws every one of them against the new adapter without a restart.
+        Refresh-State
+    }
+}
 
 function Update-Overview($d) {
     $lvOverview.BeginUpdate()
@@ -468,6 +661,16 @@ function Update-Overview($d) {
         Add-Row 'Type' $(if ($c.usingWifi) { 'Wi-Fi' } else { 'Ethernet / other' })
         Add-Row 'Link speed' ("{0}" -f $a.linkSpeedText)
         Add-Row 'Default route' ("{0} -> {1}" -f $c.activeRoute.alias, $c.activeRoute.nextHop)
+        # Which adapter the settings are read from and written to, and why: the default route
+        # unless another adapter was chosen, never a virtual or VPN one by silence. The picker's
+        # own update sets $script:targetAlias; this row reports the same value.
+        if ($null -ne $d.target) {
+            $tgt = $d.target
+            $tag = @()
+            if ($tgt.defaultRoute) { $tag += 'default route' }
+            if ($tgt.virtual) { $tag += 'virtual/VPN' }
+            Add-Row 'Settings apply to' ("{0}{1}" -f $tgt.alias, $(if ($tag.Count) { ' (' + ($tag -join ', ') + ')' } else { '' }))
+        }
         Add-Row 'DNS' $(if ($c.dnsForActive.servers.Count -gt 0) { $c.dnsForActive.servers -join ', ' } else { 'automatic' })
         if ($w.connected) {
             Add-Row 'Wi-Fi' ("{0} | {1} ch {2} | {3}% | {4}" -f $w.ssid, $w.band, $w.channel, $w.signalPct, $w.radioType)
@@ -496,7 +699,8 @@ function Update-Overview($d) {
     $lvOverview.EndUpdate()
 }
 
-function Update-Fixes($t) {
+function Update-Fixes($t, $pending) {
+    Update-RestorePoints $pending
     if ($null -eq $t) {
         foreach ($row in @($rowPlan, $rowNic, $rowNagle, $rowWifi, $rowOrder, $rowDns)) {
             $row.Label.Text = 'No active adapter - connect one and press Refresh'
@@ -629,9 +833,11 @@ function Update-Fixes($t) {
             $in = $presetMap[$t.id]
             # Short on purpose: the row is 300 px wide, and the long explanations live in the
             # tooltip instead of running into the state column.
-            $row.Hint.Text = '[{0}] {1}' -f $riskMap[$t.risk], $(if ($in) { 'in ' + ($in -join ', ') } else { 'no preset' })
+            $onAdapter = if ($script:targetAlias) { ' - on ' + [string]$script:targetAlias } else { '' }
+            $row.Hint.Text = '[{0}] {1}{2}' -f $riskMap[$t.risk], $(if ($in) { 'in ' + ($in -join ', ') } else { 'no preset' }), $onAdapter
             $fixTip.SetToolTip($row.Hint, ("What it changes:`n{0}`n`nTrade-off:`n{1}`n`nUndo:`n{2}" -f $t.what, $t.tradeoff, $t.undo))
-            $fixTip.SetToolTip($row.Title, ("{0} - {1}" -f $t.label, $t.stock))
+            $onAdapter = if ($script:targetAlias) { "`nChanges on adapter: $($script:targetAlias)" } else { '' }
+            $fixTip.SetToolTip($row.Title, ("{0} - {1}{2}" -f $t.label, $t.stock, $onAdapter))
         }
     }
 }
@@ -909,8 +1115,10 @@ function Refresh-State {
             }
         }
         $script:catalog = $r.data.catalog
+        # The picker first: every row below is read from the adapter it selects.
+        Update-AdapterPicker $r.data
         Update-Overview $r.data
-        Update-Fixes $r.data.tweak
+        Update-Fixes $r.data.tweak $r.data.pending
         Update-Drift $r.data.drift
         if (-not $script:soakRunning) { Update-SoakProgress $r.data.soak }
     }
@@ -922,7 +1130,7 @@ function Send-Tweak([string]$action, [string]$presetId) {
     Send-Cmd 'apply' $tweakArgs {
         param($r)
         if (-not $r.ok) { Set-Status ('Error: ' + $r.error) 'bad'; return }
-        if ($null -ne $r.data.tweak) { Update-Fixes $r.data.tweak }
+        if ($null -ne $r.data.tweak) { Update-Fixes $r.data.tweak $r.data.pending }
         $msg = if ($r.data.message) { $r.data.message } else { 'Done.' }
         $kind = if ($r.data.kind -eq 'bad') { 'bad' } elseif ($r.data.kind -eq 'warn') { 'warn' } else { 'good' }
         Set-Status $msg $kind
@@ -933,6 +1141,19 @@ function Send-Tweak([string]$action, [string]$presetId) {
 # ------------------------------------------------------------------- handlers
 
 $btnRefresh.Add_Click({ Refresh-State })
+
+$cmbAdapter.Add_SelectedIndexChanged({
+    if ($script:fillingAdapter) { return }
+    $i = $cmbAdapter.SelectedIndex
+    if ($i -lt 0 -or $i -ge $script:adapterItems.Count) { return }
+    Set-TargetAdapter $script:adapterItems[$i].alias
+})
+
+# Revealing virtual adapters never changes the target: it only offers them.
+$chkVirtual.Add_CheckedChanged({
+    $script:showVirtual = [bool]$chkVirtual.Checked
+    Set-AdapterPickerItems
+})
 $btnPlan = $rowPlan.Button
 $btnNic = $rowNic.Button
 $btnNagle = $rowNagle.Button
@@ -1093,10 +1314,101 @@ $form.Add_FormClosing({
     $timer.Stop()
 })
 
-# ------------------------------------------------------------------- startup
+function Stop-Engine {
+    $timer.Stop()
+    try {
+        if (-not $script:proc.HasExited) {
+            $script:proc.Kill()
+            # Wait for the engine to let go of the response file, or the delete below fails
+            # with a sharing violation on Windows.
+            [void]$script:proc.WaitForExit(3000)
+        }
+    } catch { }
+    for ($i = 0; $i -lt 5; $i++) {
+        if (-not (Test-Path $script:outFile)) { break }
+        try { Remove-Item -LiteralPath $script:outFile -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 200 }
+    }
+}
 
-[void]$form.Show()
-[void]$form.Refresh()
+# ------------------------------------------------- headless adapter self-test
+# The shipped window built but not shown, driven against the real bridge and fake Windows by
+# lib/gui-adapter.test.mjs. Every step goes through the control or handler a click would use,
+# so the picker, the rows and the restore-point list are exercised, not a copy of their logic.
+function Wait-Gui([scriptblock]$cond, [int]$timeoutMs = 30000) {
+    $until = (Get-Date).AddMilliseconds($timeoutMs)
+    while ($true) {
+        Poll-Bridge
+        [System.Windows.Forms.Application]::DoEvents()
+        if (& $cond) { return $true }
+        if ((Get-Date) -gt $until) { return $false }
+        Start-Sleep -Milliseconds 40
+    }
+}
+
+function Invoke-GuiAdapterSelfTest {
+    $checks = [ordered]@{}
+    function Note([string]$name, [bool]$ok, [string]$detail) {
+        $checks[$name] = [pscustomobject]@{ ok = $ok; detail = $detail }
+    }
+
+    if (-not (Wait-Gui { $null -ne $script:adapterChoices -and @($script:adapterChoices).Count -gt 0 })) {
+        Note 'state' $false 'the bridge never delivered state'
+        return $checks
+    }
+
+    $aliases = @($script:adapterItems | ForEach-Object { $_.alias })
+    $virtual = @($script:adapterChoices | Where-Object { $_.virtual } | ForEach-Object { $_.alias })
+    $note = [string]$lblAdapterNote.Text
+    $shown = if ($cmbAdapter.SelectedIndex -ge 0) { $script:adapterItems[$cmbAdapter.SelectedIndex].alias } else { '' }
+    Note 'preselected' (([string]$script:targetAlias -eq 'WLAN') -and ($shown -eq 'WLAN')) ("target=$($script:targetAlias) shown=$shown")
+    Note 'physical-only' (($aliases -notcontains 'Tailscale') -and $virtual.Count -gt 0) ("shown=$($aliases -join ',') virtual=$($virtual -join ',')")
+    Note 'vpn-note' (($note -match 'virtual adapter') -and ($note -match 'WLAN')) $note
+
+    # Ticking the box reveals the VPN adapter without moving the target.
+    $chkVirtual.Checked = $true
+    $revealed = @($script:adapterItems | ForEach-Object { $_.alias })
+    $still = if ($cmbAdapter.SelectedIndex -ge 0) { $script:adapterItems[$cmbAdapter.SelectedIndex].alias } else { '' }
+    Note 'revealed' (($revealed -contains 'Tailscale') -and ($still -eq 'WLAN')) ("shown=$($revealed -join ',') shown-selected=$still")
+
+    # Choosing from the picker goes through the same handler a click does.
+    $index = -1
+    for ($i = 0; $i -lt $script:adapterItems.Count; $i++) {
+        if ($script:adapterItems[$i].alias -eq 'Ethernet 2') { $index = $i; break }
+    }
+    if ($index -lt 0) {
+        Note 'switch' $false 'Ethernet 2 is not offered'
+        return $checks
+    }
+    $cmbAdapter.SelectedIndex = $index
+    $switched = Wait-Gui { ([string]$script:targetAlias -eq 'Ethernet 2') -and ($null -ne $script:lastTweak) -and ([string]$script:lastTweak.alias -eq 'Ethernet 2') }
+    $saved = ''
+    try { $saved = [string](Get-Content (Join-Path $script:dataDir 'config.json') -Raw | ConvertFrom-Json).adapter } catch { }
+    Note 'switch-persisted' ($switched -and ($saved -eq 'Ethernet 2')) ("target=$($script:targetAlias) saved=$saved")
+
+    # An apply names the chosen adapter, and the restore point it lands says so too. The power
+    # plan is the row the fake Windows records a write for, so the read-back can agree.
+    Send-Tweak 'plan-power-off'
+    $landed = Wait-Gui { @($lvRestore.Items | Where-Object { $_.Text -like 'Wireless*' }).Count -gt 0 }
+    $restoreRow = @($lvRestore.Items | Where-Object { $_.Text -like 'Wireless*' } | Select-Object -First 1)
+    $restoreAlias = if ($restoreRow.Count -eq 1) { [string]$restoreRow[0].SubItems[1].Text } else { '' }
+    $planOff = ($null -ne $script:lastTweak) -and ([string]$script:lastTweak.planPower -eq 'off')
+    Note 'apply-chosen-adapter' ($landed -and ($restoreAlias -eq 'Ethernet 2') -and $planOff) ("restore=$restoreAlias plan=$($script:lastTweak.planPower) status=$($lblStatus.Text)")
+    Note 'rows-named' ([string]$rowPlan.Hint.Text -match 'Ethernet 2') ([string]$rowPlan.Hint.Text)
+
+    # A name the machine does not have is refused and changes nothing.
+    $before = ''
+    try { $before = [string](Get-Content (Join-Path $script:dataDir 'config.json') -Raw | ConvertFrom-Json).adapter } catch { }
+    Set-TargetAdapter 'Nope 0'
+    $refused = Wait-Gui { [string]$lblStatus.Text -like 'Adapter not changed:*' }
+    $after = ''
+    try { $after = [string](Get-Content (Join-Path $script:dataDir 'config.json') -Raw | ConvertFrom-Json).adapter } catch { }
+    $backOnSaved = ($cmbAdapter.SelectedIndex -ge 0) -and ($script:adapterItems[$cmbAdapter.SelectedIndex].alias -eq 'Ethernet 2')
+    Note 'refused' ($refused -and ($before -eq $after) -and ($after -eq 'Ethernet 2') -and $backOnSaved -and ([string]$script:targetAlias -eq 'Ethernet 2')) ("status=$($lblStatus.Text) saved=$after")
+
+    return $checks
+}
+
+# ------------------------------------------------------------------- startup
 
 $started = $false
 try {
@@ -1124,23 +1436,31 @@ if ($started) {
     }
 }
 
+if ($env:PINGLAB_GUI_SELFTEST) {
+    if (-not $started) {
+        Write-Output 'GUISELFTEST {"state":{"ok":false,"detail":"the engine did not start"}}'
+        exit 1
+    }
+    $checks = Invoke-GuiAdapterSelfTest
+    # Written as UTF-8 to a file: the console code page would turn the curly quotes in a note
+    # into something a JSON parser refuses, and the note is part of what is verified.
+    $outPath = Join-Path $script:dataDir 'gui-adapter-selftest.json'
+    $json = $checks | ConvertTo-Json -Compress -Depth 5
+    [System.IO.File]::WriteAllText($outPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Output ('GUISELFTEST ' + $outPath)
+    $failed = @($checks.Values | Where-Object { -not $_.ok })
+    Stop-Engine
+    exit $(if ($failed.Count -gt 0) { 1 } else { 0 })
+}
+
+[void]$form.Show()
+[void]$form.Refresh()
+
 while ($form.Visible) {
     [System.Windows.Forms.Application]::DoEvents()
     Poll-Bridge
     Start-Sleep -Milliseconds 40
 }
 
-$timer.Stop()
-try {
-    if ($started -and -not $script:proc.HasExited) {
-        $script:proc.Kill()
-        # Wait for the engine to let go of the response file, or the delete below fails
-        # with a sharing violation on Windows.
-        [void]$script:proc.WaitForExit(3000)
-    }
-} catch { }
-for ($i = 0; $i -lt 5; $i++) {
-    if (-not (Test-Path $script:outFile)) { break }
-    try { Remove-Item -LiteralPath $script:outFile -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 200 }
-}
+Stop-Engine
 Log 'script end'

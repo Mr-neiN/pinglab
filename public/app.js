@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
 const state = {
+  version: null,
+  benchPolicy: null,
   connection: null,
   tweak: null,
   pending: null,
@@ -8,6 +10,10 @@ const state = {
   endpoints: [],
   catalog: null,
   protocols: null,
+  target: null,
+  adapterChoices: [],
+  targetFallback: null,
+  showVirtual: false,
   update: null,
   probe: null,
   bloat: null,
@@ -15,6 +21,7 @@ const state = {
   scan: null,
   alias: null,
   bench: { pending: null, latest: null, reverted: false },
+  trend: null,
 };
 
 const esc = (s) =>
@@ -141,6 +148,12 @@ function updateVerdict() {
 }
 
 /* --------------------------------------------------------------- connection */
+
+// The version the running copy reports, from the same package.json the update check reads.
+function renderVersion() {
+  const pill = $("versionPill");
+  pill.textContent = state.version ? `PingLab ${state.version}` : "PingLab";
+}
 
 function renderLink() {
   const c = state.connection;
@@ -347,9 +360,17 @@ function renderProbe() {
     const d = Math.round((s.gameAvgMs - prev.gameAvgMs) * 10) / 10;
     delta = ` · ${d === 0 ? "same as" : d > 0 ? `+${d} ms vs` : `${d} ms vs`} previous run`;
   }
-  meta.innerHTML = `${s.reachable ?? 0}/${s.endpoints ?? 0} endpoints answered · game average <b>${num(s.gameAvgMs)} ms</b>, jitter ${num(
-    s.gameJitter,
-  )} ms, loss ${num(s.gameLoss)}%${delta}`;
+  // Two round trips, named: the table's avg column is the network-path handshake, while a
+  // game-server figure exists only where the service answered its own UDP query.
+  meta.innerHTML = `${s.reachable ?? 0}/${s.endpoints ?? 0} endpoints answered · game-server RTT <b>${num(
+    s.gameAvgMs,
+  )} ms</b> (UDP, only where the service answered), jitter ${num(s.gameJitter)} ms, loss ${num(
+    s.gameLoss,
+  )}%${delta}`;
+
+  // Long-term: the stored probe history, read as a series. It is drawn even before this
+  // session's first test, because it describes runs from earlier days.
+  renderTrend();
 
   const icmp = (p.icmp || []).filter((i) => i && (i.loss > 0 || i.avg !== null));
   const icmpBox = $("icmpBox");
@@ -362,7 +383,7 @@ function renderProbe() {
         return `${esc(i.host)}: avg ${num(i.avg)} ms, jitter ${num(i.jitter)} ms, ${num(i.loss)}% loss`;
       })
       .join(" · ");
-    icmpBox.innerHTML = `<b>ICMP echo</b> ${list}${
+    icmpBox.innerHTML = `<b>ICMP echo (network path)</b> ${list}${
       p.transport ? `<div class="meta" style="margin-top:6px">${esc(p.transport)}</div>` : ""
     }`;
   } else {
@@ -378,7 +399,10 @@ function renderProbe() {
     const list = udp
       .map((u) => {
         if (u.state === "answered") {
-          return `${esc(u.label)}: avg ${num(u.avg)} ms, jitter ${num(u.jitter)} ms, ${num(u.loss)}% loss`;
+          const step = u.challenged ? ", answered after a challenge" : "";
+          return `game-server RTT ${esc(u.label)}: avg ${num(u.avg)} ms, jitter ${num(u.jitter)} ms, ${num(
+            u.loss,
+          )}% loss${step}`;
         }
         if (u.state === "closed") {
           return `${esc(u.label)}: port closed${u.pathMs === null ? "" : ` (path ${num(u.pathMs)} ms)`}`;
@@ -399,6 +423,34 @@ function renderProbe() {
     udpBox.innerHTML = "";
     udpBox.classList.add("hidden");
   }
+}
+
+// The long-term line under the latency table. It says how many runs it is based on and never
+// claims a direction before lib/trend.mjs is willing to state one.
+function renderTrend() {
+  const box = $("trendBox");
+  if (!box) return;
+  const t = state.trend;
+  if (!t || !t.sentence) {
+    box.textContent = "";
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  const points = (t.points || []).slice(-30);
+  const spark = points.length >= 2 ? sparkline(points.map((p) => p.ms)) : "";
+  box.innerHTML = `${spark ? `${spark} ` : ""}${esc(t.sentence)}`;
+}
+
+/** A tiny inline SVG line, scaled to its own range so a flat line reads as flat. */
+function sparkline(values) {
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const span = hi - lo || 1;
+  const points = values
+    .map((v, i) => `${((i / (values.length - 1)) * 100).toFixed(1)},${(28 - ((v - lo) / span) * 24).toFixed(1)}`)
+    .join(" ");
+  return `<svg class="spark" viewBox="0 0 100 30" width="110" height="26" aria-hidden="true"><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`;
 }
 
 function renderBloat() {
@@ -461,7 +513,7 @@ function renderDns() {
     box.innerHTML = `<p class="empty">Not tested. Fast DNS fixes slow store pages and sign-ins, not your in-game ping.</p>`;
     return;
   }
-  const current = (state.connection?.dnsForActive?.servers || []).join(", ") || "automatic";
+  const current = (state.connection?.dnsForTarget?.servers || state.connection?.dnsForActive?.servers || []).join(", ") || "automatic";
   box.innerHTML = `
     <table class="data-table">
       <thead><tr><th>Resolver</th><th class="num">median</th><th class="num">worst</th><th class="num">answered</th><th class="num">missed</th><th></th></tr></thead>
@@ -483,7 +535,7 @@ function renderDns() {
         .join("")}
       </tbody>
     </table>
-    <p class="meta">Currently in use on ${esc(state.alias || "this adapter")}: <b>${esc(current)}</b>. ${esc(
+    <p class="meta">Currently in use on ${esc(state.target?.alias || state.alias || "this adapter")}: <b>${esc(current)}</b>. ${esc(
       d.verdict || "No verdict.",
     )}</p>`;
 }
@@ -604,6 +656,64 @@ function stateFor(id, tw) {
   }
 }
 
+/* Which adapter the rows below are read from and written to. The server decides the target
+   (the default route, physical before virtual) and hands over the list; this renders it and
+   sends the pick back, so the same device is tuned by the page, the GUI and the terminal. */
+
+function adapterChoiceText(c) {
+  const tags = [];
+  if (c.defaultRoute) tags.push("default route");
+  if (c.virtual) tags.push("virtual / VPN");
+  if (c.status && c.status !== "Up") tags.push(c.status);
+  return `${c.alias}${c.description ? ` — ${c.description}` : ""}${tags.length ? ` (${tags.join(", ")})` : ""}`;
+}
+
+/** A virtual or VPN adapter is offered only once the box is ticked, or when it is the target. */
+function visibleAdapterChoices() {
+  const target = state.target?.alias;
+  return (state.adapterChoices || []).filter((c) => !c.virtual || state.showVirtual || c.alias === target);
+}
+
+function renderAdapterPick() {
+  const pick = $("adapterPick");
+  const note = $("adapterNote");
+  if (!pick || !note) return;
+  const target = state.target;
+  const choices = visibleAdapterChoices();
+  pick.innerHTML = choices
+    .map(
+      (c) =>
+        `<option value="${esc(c.alias)}"${c.alias === target?.alias ? " selected" : ""}>${esc(adapterChoiceText(c))}</option>`,
+    )
+    .join("");
+  pick.disabled = choices.length === 0;
+  const lines = [target?.note, state.targetFallback].filter(Boolean);
+  note.textContent = lines.join(" ");
+  note.classList.toggle("hidden", lines.length === 0);
+  const box = $("showVirtual");
+  if (box) box.checked = Boolean(state.showVirtual);
+}
+
+/** Persist the pick, then redraw the rows from the values the server read back. */
+async function setAdapter(alias) {
+  const r = await api("/api/adapter", { alias });
+  if (!r.ok) {
+    toast(r.error || "That adapter could not be selected", "bad");
+    renderAdapterPick();
+    return null;
+  }
+  if (r.target) state.target = r.target;
+  if (r.adapterChoices) state.adapterChoices = r.adapterChoices;
+  state.targetFallback = r.targetFallback || null;
+  if (r.tweakState !== undefined) state.tweak = r.tweakState;
+  if (r.pending) state.pending = r.pending;
+  if (r.drift !== undefined) state.drift = r.drift;
+  renderAdapterPick();
+  renderFixes();
+  toast(`Settings now apply to ${r.target?.alias || alias}.`, "good");
+  return r;
+}
+
 function fixCard(id, tw) {
   const t = meta(id);
   const st = t ? stateFor(id, tw) : null;
@@ -616,6 +726,7 @@ function fixCard(id, tw) {
         <div class="fix-note">${st.note}</div>
         <div class="sub-note"><b>Changes:</b> ${esc(t.what)}</div>
         <div class="sub-note"><b>Trade-off:</b> ${esc(t.tradeoff)}</div>
+        <div class="sub-note dim">Applies to <b>${esc(state.target?.alias || "no adapter")}</b>${state.target?.virtual ? " (virtual / VPN)" : state.target?.defaultRoute ? " — the adapter with the default route" : ""}</div>
         <div class="sub-note dim">Windows default: ${esc(t.stock)}</div>
       </div>
       <div class="fix-actions">${st.actions}</div>
@@ -679,6 +790,18 @@ function renderFixes() {
     badge.title = "Changes PingLab can undo";
   } else {
     badge.classList.add("hidden");
+  }
+
+  // A restore point records the adapter it belongs to. The change log names it per line, and
+  // this lists what is still applied per adapter, so "restore" is never a guess about the device.
+  const points = $("restorePoints");
+  const pointsBox = $("restorePointsBox");
+  if (points && pointsBox) {
+    const live = pending?.problem ? [] : pending?.items || [];
+    points.innerHTML = live
+      .map((it) => `<li>${esc(it.label)} · on ${esc(it.alias)} · ${timeOf(it.at)}</li>`)
+      .join("");
+    pointsBox.classList.toggle("hidden", live.length === 0);
   }
 
   const log = $("changeLog");
@@ -816,7 +939,7 @@ function renderBench() {
       }. Apply the setting, then measure again.`
     : latest
       ? `Last comparison ${timeOf(latest.createdAt)}.`
-      : "Not started. A baseline is five full latency runs with the endpoints above, and so is the measurement after the change.";
+      : `Not started. A baseline is ${state.benchPolicy?.repeats ?? 7} full latency runs with the endpoints above, and so is the measurement after the change.`;
 
   const result = latest?.data?.result;
   if (!result) {
@@ -961,6 +1084,9 @@ async function loadState() {
     toast(s?.error || "Could not read the network state", "bad");
     return;
   }
+  state.version = s.version || null;
+  state.benchPolicy = s.benchPolicy || null;
+  state.trend = s.trend || null;
   state.connection = s.connection;
   state.tweak = s.tweakState;
   state.pending = s.pending;
@@ -970,15 +1096,21 @@ async function loadState() {
   state.catalog = s.catalog || null;
   state.protocols = s.protocols || null;
   state.update = s.update || null;
+  state.target = s.target || null;
+  state.adapterChoices = s.adapterChoices || [];
+  state.targetFallback = s.targetFallback || null;
   state.alias = s.connection.activeRoute?.alias || null;
+  renderVersion();
   renderLink();
   renderConnection();
+  renderAdapterPick();
   renderFixes();
   renderEndpoints();
   renderHistoryNotice();
   renderConfigNotice();
   renderUpdateNotice();
   renderBench();
+  renderTrend();
   renderHistory(s.recentRuns);
   updateVerdict();
 }
@@ -986,7 +1118,8 @@ async function loadState() {
 async function runProbe() {
   const btn = $("runProbe");
   busy(btn, true, "Testing…");
-  $("probeMeta").textContent = "Probing endpoints — 5 handshakes each, then UDP to each game port…";
+  $("probeMeta").textContent =
+    "Probing endpoints — 5 handshakes each (network path), then the game's own query (game-server RTT)…";
   const r = await api("/api/probe", {});
   busy(btn, false);
   if (!r.ok) {
@@ -996,6 +1129,13 @@ async function runProbe() {
   }
   state.probe = r;
   renderProbe();
+  // This run is now stored, so the long-term line is re-read rather than left describing the
+  // runs that existed when the page loaded.
+  const trend = await api("/api/trend");
+  if (trend?.ok) {
+    state.trend = trend.trend;
+    renderTrend();
+  }
   updateVerdict();
 }
 
@@ -1057,7 +1197,8 @@ async function scanWifi() {
 }
 
 async function tweak(action, extra = {}) {
-  if (!state.alias) return toast("No active adapter to change", "bad");
+  const alias = state.target?.alias;
+  if (!alias) return toast("No adapter is selected to change", "bad");
   if (action === "restore-all" && !confirm("Restore every setting this app changed back to how it was?")) return;
   if (
     action === "apply-preset" &&
@@ -1082,7 +1223,7 @@ async function tweak(action, extra = {}) {
       "apply-preset": "Applying preset…",
     }[action] || "Working…";
   toast(`${label} Approve the Windows prompt if it appears.`);
-  const r = await api("/api/tweak", { action, alias: state.alias, ...extra });
+  const r = await api("/api/tweak", { action, alias, ...extra });
   if (r.cancelled) {
     toast("Nothing changed — the administrator prompt was closed.", "bad");
   } else if (!r.ok) {
@@ -1098,8 +1239,12 @@ async function tweak(action, extra = {}) {
     state.connection = fresh.connection;
     state.tweak = fresh.tweakState;
     state.pending = fresh.pending;
+    state.target = fresh.target || state.target;
+    state.adapterChoices = fresh.adapterChoices || state.adapterChoices;
+    state.targetFallback = fresh.targetFallback || null;
     renderLink();
     renderConnection();
+    renderAdapterPick();
     renderFixes();
   }
   return r;
@@ -1299,6 +1444,11 @@ $("refreshHistory").addEventListener("click", async () => {
 $("addEndpoint").addEventListener("click", () => $("endpointRows").appendChild(endpointRow()));
 $("saveEndpoints").addEventListener("click", saveEndpoints);
 $("restoreAll").addEventListener("click", () => tweak("restore-all"));
+$("adapterPick").addEventListener("change", () => setAdapter($("adapterPick").value));
+$("showVirtual").addEventListener("change", () => {
+  state.showVirtual = $("showVirtual").checked;
+  renderAdapterPick();
+});
 $("startSoak").addEventListener("click", async () => {
   const minutes = Math.min(60, Math.max(1, Number($("soakMinutes").value) || 10));
   const r = await api("/api/soak/start", { minutes });

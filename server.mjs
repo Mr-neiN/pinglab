@@ -16,16 +16,18 @@ import {
   revertSentence,
 } from "./lib/bench.mjs";
 import { benchmark as dnsBenchmark, RESOLVERS } from "./lib/dns.mjs";
-import { snapshot, wifi, dnsServers, routes } from "./lib/net.mjs";
+import { snapshot, adapters, wifi, dnsServers, routes } from "./lib/net.mjs";
 import { analyseWifi, wifiAdvice, scanWifi } from "./lib/wifi.mjs";
 import { dnsWinner, dnsVerdict, bloatVerdict, transportText, udpText, scanFreshnessText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, applyPreset, knownActions, actionSpec } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
+import { probeTrend } from "./lib/trend.mjs";
 import { createStateCache } from "./lib/state-cache.mjs";
-import { checkForUpdate } from "./lib/update.mjs";
+import { checkForUpdate, currentVersion } from "./lib/update.mjs";
 import { UDP_PROTOCOLS } from "./lib/udp-proto.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, tweakById } from "./lib/catalog.mjs";
-import { loadConfig, saveConfig } from "./lib/config.mjs";
+import { loadConfig, saveConfig, saveAdapter } from "./lib/config.mjs";
+import { adapterChoices } from "./lib/target.mjs";
 import { saveRun, listRuns, saveTweak, listTweaks, previousRun, dbStatus, getRun } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, listSoakRuns, getSoakRun, compareSoaks, soakLabel } from "./lib/soak.mjs";
 import { openTarget } from "./lib/ps.mjs";
@@ -33,6 +35,7 @@ import {
   HttpError,
   refuse,
   bodyObject,
+  adapterRequest,
   bufferbloatRequest,
   endpointList,
   soakRequest,
@@ -193,13 +196,36 @@ async function serveStatic(res, urlPath) {
 async function buildState() {
   const config = await loadConfig();
   const connection = await snapshot();
-  const alias = connection.activeRoute?.alias || null;
+  // Which adapter the settings are aimed at is a persisted choice, not an inference: the rows,
+  // the restore points and every apply read the same answer, so a docked laptop or a VPN cannot
+  // have one surface tuning Wi-Fi while another says it is tuning Ethernet.
+  const pick = adapterChoices({
+    adapters: connection.adapters,
+    routes: connection.routes,
+    activeRoute: connection.activeRoute,
+    chosen: config.adapter,
+  });
+  const alias = pick.target?.alias || null;
+  const dnsForTarget = alias ? connection.dns.find((d) => d.alias === alias) || null : null;
   const [tw, tweaks] = await Promise.all([
     alias ? tweakState(alias, { dns: connection.dns }) : Promise.resolve(null),
     Promise.resolve(pendingTweaks()),
   ]);
   return {
-    connection,
+    // The version this copy actually runs as, read from package.json beside it. The page shows
+    // it, so a copy that was upgraded (or one that was not) is visible instead of inferred,
+    // and it is the same value the update check compares against the newest release.
+    version: currentVersion(),
+    // The benchmark policy, so a surface can say how many repeats a phase takes without
+    // keeping a second copy of the number that can drift from lib/bench.mjs.
+    benchPolicy: benchPolicy(),
+    connection: { ...connection, dnsForTarget },
+    // The adapter every setting below is read from and written to, and the list a picker may
+    // offer. The default route is marked on it; a virtual adapter is offered but never picked
+    // on its own (lib/target.mjs), and `fallback` explains a remembered adapter that is gone.
+    target: pick.target,
+    adapterChoices: pick.choices,
+    targetFallback: pick.fallback,
     tweakState: tw,
     pending: tweaks,
     // A change PingLab made that Windows has since put back travels with the state, so the
@@ -214,6 +240,9 @@ async function buildState() {
     endpoints: config.endpoints,
     resolvers: RESOLVERS,
     recentRuns: listRuns(null, 12),
+    // Long-term latency and jitter from the stored probe runs - the same history the page's
+    // "previous run" figure comes from, read back as a series instead of one comparison.
+    trend: probeTrend(listRuns("probe", 60)),
     // The last comparison and the last rollback travel with the state, so the GUI and the
     // terminal print the same words the page shows rather than only a history row.
     benchmark: {
@@ -348,6 +377,12 @@ const server = http.createServer(async (req, res) => {
         udpNote: udpText(summary.udp),
         previous: previousRun("probe"),
       });
+    }
+
+    if (req.method === "GET" && path === "/api/trend") {
+      // The stored probe history read as a series, so the page can update its long-term line
+      // after a run without paying for a full state read (which asks Windows for everything).
+      return sendJson(res, 200, { ok: true, trend: probeTrend(listRuns("probe", 60)) });
     }
 
     if (req.method === "POST" && path === "/api/bufferbloat") {
@@ -599,6 +634,34 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return sendJson(res, 200, { ok: scan.ok, scan, advice, freshnessText: scanFreshnessText(scan.freshness) });
+    }
+
+    // Which adapter settings are aimed at is a persisted choice: the rows, the restore points
+    // and every apply read it, so the page and the GUI cannot disagree about the device.
+    if (req.method === "POST" && path === "/api/adapter") {
+      const { alias } = adapterRequest(await readJson(req));
+      const known = (await adapters()).find((a) => a.name === alias);
+      if (!known) throw refuse(`"${alias}" is not an adapter on this machine.`);
+      const saved = await saveAdapter(known.name);
+      if (!saved.ok) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: saved.error,
+          config: saved.problem ? { problem: saved.problem } : undefined,
+        });
+      }
+      // Every row is read from the chosen adapter, so the cached state is stale by definition.
+      stateCache.invalidate();
+      const fresh = await stateCache.get();
+      return sendJson(res, 200, {
+        ok: true,
+        target: fresh.target,
+        adapterChoices: fresh.adapterChoices,
+        targetFallback: fresh.targetFallback,
+        tweakState: fresh.tweakState,
+        pending: fresh.pending,
+        drift: fresh.drift,
+      });
     }
 
     if (req.method === "POST" && path === "/api/tweak") {

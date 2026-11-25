@@ -148,6 +148,9 @@ main { padding: 22px 28px 48px; max-width: 1320px; margin: 0 auto; }
 .hint { color: var(--muted); font-weight: 400; font-size: 11.5px; }
 
 .meta { color: var(--muted); font-size: 12px; margin: 2px 0 10px; }
+/* The long-term sparkline is a chart, not a glyph: it gets its own line so the sentence under it
+   reads as a paragraph instead of wrapping around the shape. */
+.spark { display: block; margin: 0 0 4px; }
 .empty { color: var(--muted); font-size: 12.5px; margin: 6px 0; }
 
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -295,6 +298,18 @@ main { padding: 22px 28px 48px; max-width: 1320px; margin: 0 auto; }
 .risk-moderate { color: #a56900; }
 .risk-experimental { color: #b21e1e; }
 .small { font-size: 11px; margin-left: 8px; }
+
+.adapter-pick {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0 2px; color: var(--muted); font-size: 12.5px;
+}
+.adapter-pick select {
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 7px 9px; font-size: 12.5px; font-family: inherit; max-width: 46ch;
+}
+.adapter-pick select:focus { outline: none; border-color: #3b4a66; }
+.adapter-virtual { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.adapter-virtual input { accent-color: var(--accent); }
 
 .presets {
   display: grid;

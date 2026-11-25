@@ -21,20 +21,21 @@
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { snapshot, dnsServers } from "./lib/net.mjs";
+import { snapshot, dnsServers, adapters } from "./lib/net.mjs";
 import { runProbe as probeOnce, summarizeProbe, bufferbloat } from "./lib/probe.mjs";
 import { benchmark as dnsBenchmark, verdictText, winnerChip } from "./lib/dns.mjs";
 import { bloatVerdict, transportText, udpText, scanFreshnessText } from "./lib/report.mjs";
 import { tweakState, runTweakAction, tweakOutcome, pendingTweaks, auditRows, applyPreset, knownActions, actionSpec, elevationCommand, elevationText, backupStatus } from "./lib/tweaks.mjs";
 import { driftStatus } from "./lib/drift.mjs";
 import { TWEAKS, PRESETS, RISK, presetById, presetTweaks, presetsFor, validateCatalog } from "./lib/catalog.mjs";
-import { loadConfig, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
+import { loadConfig, saveAdapter, DEFAULT_ENDPOINTS } from "./lib/config.mjs";
+import { adapterChoices } from "./lib/target.mjs";
 import { DATA_DIR } from "./lib/paths.mjs";
 import { analyseWifi, wifiAdvice, bandOf, scanWifi } from "./lib/wifi.mjs";
 import { saveRun, previousRun, listRuns, dbStatus } from "./lib/db.mjs";
 import { startSoak, stopSoak, soakStatus, summarizeRun, listSoakRuns, soakLabel } from "./lib/soak.mjs";
 import { isElevated } from "./lib/ps.mjs";
-import { checkForUpdate } from "./lib/update.mjs";
+import { checkForUpdate, currentVersion } from "./lib/update.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 try {
@@ -121,11 +122,22 @@ function say(text, kind = "info", ms = 6000) {
 async function refreshCore() {
   const config = await loadConfig();
   const connection = await snapshot();
-  const alias = connection?.activeRoute?.alias || null;
-  const tw = alias ? await tweakState(alias) : null;
+  // The adapter settings are aimed at is a saved choice, so the terminal, the GUI and the page
+  // read the same one. The default route only decides it when nothing was chosen.
+  const pick = adapterChoices({
+    adapters: connection?.adapters,
+    routes: connection?.routes,
+    activeRoute: connection?.activeRoute,
+    chosen: config.adapter,
+  });
+  const alias = pick.target?.alias || null;
+  const tw = alias ? await tweakState(alias, { dns: connection?.dns }) : null;
   ui.core = {
     connection,
     alias,
+    target: pick.target,
+    adapterChoices: pick.choices,
+    targetFallback: pick.fallback,
     tw,
     pending: pendingTweaks(),
     // A change PingLab made that Windows has since put back, so the fixes view can say it
@@ -304,6 +316,7 @@ function viewDash(W) {
       ["type", conn.usingWifi ? "Wi-Fi" : a.name ? "Ethernet / other" : "—"],
       ["link", `${a.linkSpeedText || "—"}`],
       ["route", `${conn.activeRoute?.alias || "?"} → ${conn.activeRoute?.nextHop || "?"}`],
+      ["applies to", `${ui.core?.target?.alias || "—"}${ui.core?.target?.defaultRoute ? " (default route)" : ""}${ui.core?.target?.virtual ? " (virtual / VPN)" : ""}`],
       ["DNS", dns],
       w.connected
         ? ["Wi-Fi", `${B}${w.ssid || "hidden"}${R} · ${w.band || "?"} ch ${w.channel ?? "?"} · ${w.signalPct ?? "?"}% · ${w.radioType || "?"}`]
@@ -416,6 +429,14 @@ function viewFixes(W) {
     for (const r of drift.drifted) out.push(`   ${D}·${R} ${r.setting}: ${r.observation}`);
     out.push("");
   }
+  const target = ui.core?.target;
+  if (target) {
+    out.push(
+      `  ${D}changes:${R} ${B}${target.alias}${R}${target.defaultRoute ? ` ${D}(default route)${R}` : ""}${target.virtual ? ` ${YEL}(virtual / VPN)${R}` : ""}  ${D}a picks a different adapter${R}`,
+    );
+    if (target.note) for (const line of wrapText(target.note, width)) out.push(`  ${D}${line}${R}`);
+    out.push("");
+  }
   for (const t of FIX_ROWS) {
     const st = fixState(t.id, tw);
     const mark = st.disabled ? `${GRY}⨯${R}` : st.on ? `${GRN}✓${R}` : `${GRY}–${R}`;
@@ -433,6 +454,50 @@ function viewFixes(W) {
   out.push(`  ${D}Press 1-5 to apply or revert one. S applies the safe preset, L the lowest-latency preset, R restores everything. DNS lives in the d view.${R}`);
   out.push(`  ${D}Every apply records a restore point first, and no preset contains the experimental radio row.${R}`);
   return out;
+}
+
+/** Which adapter the settings are aimed at, and the one press that changes it. */
+function viewAdapters(W) {
+  const choices = ui.core?.adapterChoices || [];
+  const target = ui.core?.target;
+  const width = Math.max(52, Math.min(W - 12, 92));
+  const out = [""];
+  if (!choices.length) return [...out, `  ${D}No adapter was found on this machine.${R}`];
+  out.push("");
+  choices.forEach((c, i) => {
+    const mark = c.alias === target?.alias ? `${GRN}✓${R}` : `${GRY}–${R}`;
+    const tags = [
+      c.defaultRoute ? "default route" : null,
+      c.virtual ? "virtual / VPN" : null,
+      c.status && c.status !== "Up" ? c.status : null,
+    ].filter(Boolean);
+    out.push(
+      `  ${INV} ${i + 1} ${R} ${mark} ${B}${c.alias}${R}${c.description ? ` ${D}${c.description}${R}` : ""}${tags.length ? ` ${YEL}(${tags.join(", ")})${R}` : ""}`,
+    );
+  });
+  if (target?.note) {
+    out.push("");
+    for (const line of wrapText(target.note, width)) out.push(`  ${D}${line}${R}`);
+  }
+  out.push("");
+  out.push(`  ${D}Press a number to aim every setting at that adapter. Virtual and VPN adapters are listed last; choosing one is deliberate.${R}`);
+  return out;
+}
+
+/** Save a pick, but only for an adapter this machine actually has. */
+async function saveTargetAdapter(name) {
+  const wanted = String(name || "").trim();
+  const known = (await adapters()).find((a) => a.name === wanted);
+  if (!known) return { ok: false, error: `"${wanted}" is not an adapter on this machine.` };
+  return saveAdapter(known.name);
+}
+
+/** Save the pick, so every surface reads the same adapter from then on. */
+async function chooseAdapter(alias) {
+  const saved = await saveTargetAdapter(alias);
+  if (!saved.ok) return say(saved.error || "That adapter could not be selected.", "bad");
+  await refreshCore();
+  say(`Settings now apply to ${ui.core?.target?.alias || alias}.`, "good", 4000);
 }
 
 /** The bufferbloat block, shown even when no latency probe has been run. */
@@ -467,11 +532,13 @@ function viewProbe(W) {
     );
   }
   out.push("");
-  out.push(`  ${D}game avg${R} ${B}${n1(p.summary.gameAvgMs)} ms${R}   ${D}jitter${R} ${n1(p.summary.gameJitter)} ms   ${D}loss${R} ${n1(p.summary.gameLoss)}%   ${D}reachable${R} ${p.summary.reachable}/${p.summary.endpoints}`);
+  out.push(
+    `  ${D}game-server RTT${R} ${B}${n1(p.summary.gameAvgMs)} ms${R} ${D}(UDP, only where the service answered)   jitter${R} ${n1(p.summary.gameJitter)} ms   ${D}loss${R} ${n1(p.summary.gameLoss)}%   ${D}reachable${R} ${p.summary.reachable}/${p.summary.endpoints}`,
+  );
   if (p.icmp?.length) {
     out.push("");
     out.push(
-      `  ${D}ICMP echo: ${p.icmp.map((i) => `${i.host} avg ${n1(i.avg)} ms · jitter ${n1(i.jitter)} ms · ${n0(i.loss)}% loss`).join(" · ")}${R}`,
+      `  ${D}ICMP echo (network path): ${p.icmp.map((i) => `${i.host} avg ${n1(i.avg)} ms · jitter ${n1(i.jitter)} ms · ${n0(i.loss)}% loss`).join(" · ")}${R}`,
     );
     const note = transportText(p.summary.transport);
     if (note) for (const line of wrapText(note, W - 4)) out.push(`  ${D}${line}${R}`);
@@ -479,7 +546,11 @@ function viewProbe(W) {
   if (p.udp?.length) {
     out.push("");
     const rows = p.udp.map((u) => {
-      if (u.state === "answered") return `${u.label}: ${n1(u.avg)} ms · jitter ${n1(u.jitter)} ms · ${n0(u.loss)}% loss`;
+      if (u.state === "answered") {
+        return `${u.label} (game server): ${n1(u.avg)} ms · jitter ${n1(u.jitter)} ms · ${n0(u.loss)}% loss${
+          u.challenged ? " · after a challenge" : ""
+        }`;
+      }
       if (u.state === "closed") return `${u.label}: port closed${u.pathMs === null ? "" : ` (path ${n1(u.pathMs)} ms)`}`;
       if (u.state === "unexpected") return `${u.label}: not this probe's reply (untimed)`;
       return `${u.label}: no UDP reply`;
@@ -607,10 +678,11 @@ function footer(view) {
   return `${D}${back}${nav}${R}`;
 }
 
-const VIEWS = { dash: viewDash, fixes: viewFixes, probe: viewProbe, wifi: viewWifi, dns: viewDns, soak: viewSoak, history: viewHistory };
+const VIEWS = { dash: viewDash, fixes: viewFixes, adapters: viewAdapters, probe: viewProbe, wifi: viewWifi, dns: viewDns, soak: viewSoak, history: viewHistory };
 const TITLES = {
   dash: "Overview",
   fixes: "Fixes — reversible, each with a stored backup",
+  adapters: "Which adapter settings are aimed at",
   probe: "Latency to the endpoints that matter",
   wifi: "Wi-Fi channel & band diagnosis",
   dns: "DNS resolver benchmark",
@@ -627,7 +699,10 @@ function render() {
   const lines = [];
   lines.push("");
   const busy = ui.busy ? `  ${YEL}⟳ ${ui.busy}${R}` : "";
-  lines.push(` ${B}${CYN}PingLab${R} ${D}· network doctor${R}${busy}`);
+  // The version is the one package.json says, so a copy that was upgraded - or one that was
+  // not - is visible on the dashboard instead of inferred from a release date.
+  const version = currentVersion();
+  lines.push(` ${B}${CYN}PingLab${R}${version ? ` ${D}v${version}${R}` : ""} ${D}· network doctor${R}${busy}`);
   lines.push(` ${D}${"─".repeat(W - 2)}${R}`);
   // A database that had to be set aside is not a silent reset. The dashboard is a normal way
   // to start PingLab, so the warning stays at the top of every view for the whole run, in the
@@ -697,7 +772,7 @@ async function handleKey(ch) {
   switch (ch) {
     case "?":
       ui.view = "history";
-      say("Keys: p probe, b bufferbloat, w wifi, d dns, t soak, f fixes, h history, r refresh, q quit", "info", 12000);
+      say("Keys: p probe, b bufferbloat, w wifi, d dns, t soak, f fixes, a adapters, h history, r refresh, q quit", "info", 12000);
       return;
     case "p":
       return runProbe();
@@ -712,6 +787,9 @@ async function handleKey(ch) {
     case "f":
       ui.view = "fixes";
       return;
+    case "a":
+      ui.view = "adapters";
+      return;
     case "h":
       ui.view = "history";
       return;
@@ -723,6 +801,11 @@ async function handleKey(ch) {
       return;
     default:
       break;
+  }
+  if (ui.view === "adapters") {
+    const n = Number(ch);
+    const pick = Number.isInteger(n) && n >= 1 ? (ui.core?.adapterChoices || [])[n - 1] : null;
+    if (pick) return chooseAdapter(pick.alias);
   }
   if (ui.view === "fixes") {
     const pair = FIX_ACTIONS[ch];
@@ -791,6 +874,10 @@ async function bridgeCommand(cmd, args = {}) {
       await refreshCore();
       return {
         connection: ui.core?.connection || null,
+        // Which adapter the rows, restore points and applies use, and the list a picker offers.
+        target: ui.core?.target || null,
+        adapterChoices: ui.core?.adapterChoices || [],
+        targetFallback: ui.core?.targetFallback || null,
         tweak: ui.core?.tw || null,
         pending: ui.core?.pending || null,
         drift: ui.core?.drift || null,
@@ -853,6 +940,22 @@ async function bridgeCommand(cmd, args = {}) {
     case "soakStatus": {
       const st = soakStatus();
       return { soak: st, summary: st?.summary || (ui.soak?.runId ? summarizeRun(ui.soak.runId) : null) };
+    }
+    case "adapter": {
+      // A client picks the adapter here; the answer is read back from the machine, and the
+      // choice is saved, so the page and the terminal follow it too.
+      const saved = await saveTargetAdapter(args.alias);
+      if (!saved.ok) throw new Error(saved.error || "That adapter could not be selected.");
+      await refreshCore();
+      return {
+        target: ui.core?.target || null,
+        adapterChoices: ui.core?.adapterChoices || [],
+        targetFallback: ui.core?.targetFallback || null,
+        tweak: ui.core?.tw || null,
+        pending: ui.core?.pending || null,
+        // The GUI redraws its drift sentence from the same answer the page gets.
+        drift: ui.core?.drift || null,
+      };
     }
     case "apply":
       // A bridge client may apply before it ever asked for state; without core state
@@ -931,7 +1034,7 @@ async function main() {
       "",
       "  node pinglab.mjs               interactive dashboard",
       "  node pinglab.mjs --once        render the dashboard once",
-      "  node pinglab.mjs --view NAME   draw one dashboard view once: dash, fixes, probe, wifi, dns, soak, history",
+      "  node pinglab.mjs --view NAME   draw one dashboard view once: dash, fixes, adapters, probe, wifi, dns, soak, history",
       "  node pinglab.mjs --wifi        Wi-Fi channel & band diagnosis",
       "  node pinglab.mjs --probe       latency to game endpoints",
       "  node pinglab.mjs --bloat       bufferbloat, download and upload",
@@ -944,6 +1047,7 @@ async function main() {
       "  node pinglab.mjs --self-check  catalog, presets, dispatch and live state, no changes",
       "  node pinglab.mjs --apply X     X = plan | nic | nagle | wifi | order",
       "  node pinglab.mjs --revert X    undo one fix",
+      "  node pinglab.mjs --adapter X   aim the settings at adapter X (saved for every surface)",
       "  node pinglab.mjs --restore     restore everything PingLab changed",
       "  node pinglab.mjs --json        raw snapshot as JSON",
       "",
@@ -953,10 +1057,37 @@ async function main() {
 
   if (has("--bridge")) return bridge(has("--out") ? after("--out") : null);
 
+  // Which adapter settings are aimed at is saved, not passed per call: aim it once and every
+  // surface - this terminal, the GUI and the page - reads the same device.
+  if (has("--adapter")) {
+    const saved = await saveTargetAdapter(after("--adapter"));
+    if (!saved.ok) {
+      print([saved.error]);
+      process.exitCode = 1;
+      return;
+    }
+    await refreshCore();
+    print([`settings apply to ${ui.core?.target?.alias || saved.adapter}`]);
+    return;
+  }
+
   await refreshCore();
 
   if (has("--json")) {
-    print([JSON.stringify({ connection: ui.core.connection, tweak: ui.core.tw, pending: ui.core.pending, drift: ui.core.drift }, null, 2)]);
+    print([
+      JSON.stringify(
+        {
+          connection: ui.core.connection,
+          target: ui.core.target,
+          adapterChoices: ui.core.adapterChoices,
+          tweak: ui.core.tw,
+          pending: ui.core.pending,
+          drift: ui.core.drift,
+        },
+        null,
+        2,
+      ),
+    ]);
     return;
   }
   if (has("--fixes")) {

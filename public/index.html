@@ -16,6 +16,8 @@
         </div>
       </div>
       <div class="topbar-right">
+        <!-- Filled from /api/state with the version package.json says this copy runs as. -->
+        <div id="versionPill" class="pill pill-idle">PingLab</div>
         <div id="linkPill" class="pill pill-idle">reading adapter…</div>
         <button id="runAll" class="btn btn-primary">Run full test</button>
       </div>
@@ -39,10 +41,12 @@
       <div class="grid">
         <section class="card card-wide">
           <header class="card-head">
-            <h2>Latency &amp; loss <span class="hint">TCP handshake RTT, UDP to the game port, with an ICMP cross-check</span></h2>
+            <h2>Latency &amp; loss <span class="hint">Game-server RTT (the game's own UDP query) next to network-path RTT (TCP handshake, ICMP cross-check) — only a service that answers can be timed</span></h2>
             <button id="runProbe" class="btn">Test latency</button>
           </header>
           <div id="probeMeta" class="meta">Idle.</div>
+          <!-- Filled from /api/state.trend: the stored probe history, as a series. -->
+          <div id="trendBox" class="meta hidden"></div>
           <table class="data-table">
             <thead>
               <tr>
@@ -138,11 +142,21 @@
             <span id="pendingBadge" class="badge hidden"></span>
           </header>
           <p class="meta">Every change below opens a Windows administrator prompt, and each one records a restore point first. Nothing is applied until you approve it.</p>
+          <div class="adapter-pick">
+            <label for="adapterPick">Settings apply to</label>
+            <select id="adapterPick" title="Which adapter the settings below are read from and written to"></select>
+            <label class="adapter-virtual"><input type="checkbox" id="showVirtual" /> show virtual / VPN adapters</label>
+          </div>
+          <p id="adapterNote" class="meta hidden"></p>
           <section id="driftNotice" class="hintbox dbnotice hidden" role="status"></section>
           <div id="presetBar" class="presets"></div>
           <div id="fixesBox"><p class="empty">Loading…</p></div>
           <div class="editor-actions">
             <button id="restoreAll" class="btn btn-danger">Restore everything</button>
+          </div>
+          <div id="restorePointsBox" class="hidden">
+            <p class="meta"><b>Restore points</b> — what each active change can put back, and which adapter it was written to.</p>
+            <ul id="restorePoints" class="changelog"></ul>
           </div>
           <ul id="changeLog" class="changelog"></ul>
         </section>
