@@ -98,6 +98,7 @@ function Update-AdapterPicker($d) {
     if ($d.targetFallback) { $note += [string]$d.targetFallback }
     $script:adapterNote = ($note -join ' ')
     Set-AdapterPickerItems
+    Log ("picker: choices={0} items={1} target={2}" -f @($script:adapterChoices).Count, @($script:adapterItems).Count, $script:targetAlias)
     $lblAdapterNote.Text = $script:adapterNote
     $fixTip.SetToolTip($lblAdapterNote, $script:adapterNote)
 }

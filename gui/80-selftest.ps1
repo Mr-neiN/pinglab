@@ -19,8 +19,13 @@ function Invoke-GuiAdapterSelfTest {
         $checks[$name] = [pscustomobject]@{ ok = $ok; detail = $detail }
     }
 
-    if (-not (Wait-Gui { $null -ne $script:adapterChoices -and @($script:adapterChoices).Count -gt 0 })) {
-        Note 'state' $false 'the bridge never delivered state'
+    # The picker is filled synchronously by the state callback, so waiting for the items (not
+    # only for the raw choice list) means the checks below read a finished picker. The detail
+    # names what did arrive, which is what a CI failure needs to be diagnosable.
+    if (-not (Wait-Gui { @($script:adapterItems).Count -gt 0 -and $null -ne $script:targetAlias })) {
+        $first = @($script:adapterChoices) | Select-Object -First 1
+        $sample = if ($null -ne $first) { $first | ConvertTo-Json -Compress -Depth 3 } else { 'none' }
+        Note 'state' $false ("choices=$(@($script:adapterChoices).Count) items=$(@($script:adapterItems).Count) target=$($script:targetAlias) first=$sample")
         return $checks
     }
 
@@ -83,7 +88,7 @@ function Invoke-GuiDnsSelfTest {
     }
 
     if (-not (Wait-Gui { $null -ne $script:lastTweak })) {
-        Note 'state' $false 'the bridge never delivered state'
+        Note 'state' $false ("target=$($script:targetAlias) tweak=$($null -ne $script:lastTweak) status=$($lblStatus.Text)")
         return [ordered]@{ ok = $false; checks = $checks }
     }
 
