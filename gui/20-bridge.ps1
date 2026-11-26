@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------ bridge
 
-$script:queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[object]'
+$script:pending = @{}
 $script:inflight = 0
 
 function Send-Cmd([string]$cmd, $cmdArgs, [scriptblock]$onResult) {
@@ -8,9 +8,14 @@ function Send-Cmd([string]$cmd, $cmdArgs, [scriptblock]$onResult) {
         Set-Status 'The engine process stopped. Restart PingLab.' 'bad'
         return
     }
-    $script:queue.Enqueue($onResult)
-    $script:inflight++
-    $msg = @{ id = [guid]::NewGuid().ToString('N'); cmd = $cmd; args = $cmdArgs } | ConvertTo-Json -Compress -Depth 10
+    # The answer is routed by its id, not by arrival order: a response can only ever reach the
+    # callback that asked for it, even if a busy engine answers out of order or a line is
+    # delayed. A queue of callbacks silently mis-attributed a soak answer to the state read on
+    # the CI runner and left the picker empty.
+    $id = [guid]::NewGuid().ToString('N')
+    $script:pending[$id] = $onResult
+    $script:inflight = $script:pending.Count
+    $msg = @{ id = $id; cmd = $cmd; args = $cmdArgs } | ConvertTo-Json -Compress -Depth 10
     try {
         $script:proc.StandardInput.WriteLine($msg)
         $script:proc.StandardInput.Flush()
@@ -48,12 +53,17 @@ function Poll-Bridge {
     for ($i = 0; $i -lt $parts.Count - 1; $i++) {
         $line = $parts[$i]
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
-        $cb = $null
-        if (-not $script:queue.TryDequeue([ref]$cb)) { continue }
         $obj = $null
-        try { $obj = $line | ConvertFrom-Json } catch { continue }
-        try { $script:inflight-- } catch { }
-        if ($null -ne $cb) { & $cb $obj }
+        try { $obj = $line | ConvertFrom-Json } catch { Log ('response not JSON: ' + $line.Substring(0, [math]::Min(120, $line.Length))); continue }
+        $id = [string]$obj.id
+        $cb = $script:pending[$id]
+        if ($null -eq $cb) {
+            Log ('response for no pending request: ' + $id)
+            continue
+        }
+        $script:pending.Remove($id)
+        $script:inflight = $script:pending.Count
+        & $cb $obj
     }
 }
 
