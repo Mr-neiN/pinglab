@@ -70,6 +70,11 @@ function Update-Probe($p) {
                 if ($null -ne $u.pathMs) { $title += ', path ' + (N $u.pathMs) + ' ms' }
                 $title += ')'
             }
+            elseif ($u.state -eq 'challenge') {
+                $title += ' (challenge answered'
+                if ($null -ne $u.challengeAvgMs) { $title += ' in ' + (N $u.challengeAvgMs) + ' ms' }
+                $title += '; follow-up never completed - not a reply)'
+            }
             elseif ($u.state -eq 'unexpected') { $title += ' (replied with something else, untimed)' }
             else { $title += ' (no reply)' }
         }
@@ -96,6 +101,7 @@ function Update-Probe($p) {
     $lvProbe.EndUpdate()
     $udpRows = @($p.udp | Where-Object { $null -ne $_ } | ForEach-Object {
         if ($_.state -eq 'answered') { 'UDP {0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }
+        elseif ($_.state -eq 'challenge') { 'UDP {0}: challenge answered in {1} ms, follow-up never completed (not a reply)' -f $_.label, (N $_.challengeAvgMs) }
         elseif ($_.state -eq 'closed') { 'UDP {0}: port closed, path {1} ms (not service latency)' -f $_.label, (N $_.pathMs) }
         elseif ($_.state -eq 'unexpected') { 'UDP {0}: replied with something else, untimed (not loss)' -f $_.label }
         else { 'UDP {0}: no reply (not loss)' -f $_.label }
@@ -105,7 +111,11 @@ function Update-Probe($p) {
     $udpNote = ''
     if ($null -ne $p.summary.udp) {
         $uSum = $p.summary.udp
-        if ($uSum.answered -gt 0) { $udpNote = ' | UDP {0}/{1} answered, {2} ms' -f $uSum.answered, $uSum.targets, (N $uSum.serviceMs) }
+        if ($uSum.answered -gt 0) {
+            $udpNote = ' | UDP {0}/{1} answered, {2} ms' -f $uSum.answered, $uSum.targets, (N $uSum.serviceMs)
+            if ($uSum.challenge -gt 0) { $udpNote += ' | {0} challenge-only' -f $uSum.challenge }
+        }
+        elseif ($uSum.challenge -gt 0) { $udpNote = ' | UDP no completed reply ({0}/{1} challenge only)' -f $uSum.challenge, $uSum.targets }
         elseif ($uSum.closed -gt 0) { $udpNote = ' | UDP no service reply ({0}/{1} port closed)' -f $uSum.closed, $uSum.targets }
         else { $udpNote = ' | UDP unanswered, not loss' }
     }
@@ -119,7 +129,8 @@ function Update-Probe($p) {
     # and silence is not loss, so neither is logged as a latency or loss number.
     if ($null -ne $p.summary.udp) {
         $u = $p.summary.udp
-        if ($u.answered -gt 0) { Log ("UDP {0}/{1} answered, avg {2} ms, worst loss {3}%" -f $u.answered, $u.targets, (N $u.serviceMs), (N $u.loss)) }
+        if ($u.answered -gt 0) { Log ("UDP {0}/{1} answered, avg {2} ms, worst loss {3}%; {4} challenge-only" -f $u.answered, $u.targets, (N $u.serviceMs), (N $u.loss), $u.challenge) }
+        elseif ($u.challenge -gt 0) { Log ("UDP no completed reply; {0}/{1} challenge only, {2} ms challenge RTT" -f $u.challenge, $u.targets, (N $u.challengeMs)) }
         elseif ($u.closed -gt 0) { Log ("UDP no service reply; {0}/{1} port(s) closed, path {2} ms" -f $u.closed, $u.targets, (N $u.pathMs)) }
         else { Log ("UDP unanswered on {0} endpoint(s); not counted as packet loss" -f $u.targets) }
     }

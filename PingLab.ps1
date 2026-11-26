@@ -61,6 +61,16 @@ if ($env:PINGLAB_GUI_DNSTEST) {
     exit $(if ($failed.Count -gt 0) { 1 } else { 0 })
 }
 
+if ($env:PINGLAB_GUI_PROBETEST) {
+    $probeCheck = Invoke-GuiProbeSelfTest
+    $outPath = Join-Path $script:dataDir 'gui-probe-selftest.json'
+    $json = $probeCheck | ConvertTo-Json -Compress -Depth 6
+    [System.IO.File]::WriteAllText($outPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Output ('GUIPROBETEST ' + $outPath)
+    Stop-Engine
+    exit 0
+}
+
 if ($env:PINGLAB_GUI_SELFTEST) {
     if (-not $started) {
         Write-Output 'GUISELFTEST {"state":{"ok":false,"detail":"the engine did not start"}}'

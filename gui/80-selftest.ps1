@@ -119,3 +119,39 @@ function Invoke-GuiDnsSelfTest {
     }
 }
 
+# ------------------------------------------------------------ headless probe labels
+# One synthetic probe result through the shipped Update-Probe: the grid and the summary line
+# are read back from the real controls, so the four UDP stages are checked as the window
+# draws them, without needing a game server or a network.
+function Invoke-GuiProbeSelfTest {
+    $udp = @(
+        [pscustomobject]@{ label = 'Complete'; state = 'answered'; avg = 40; p95 = 42; jitter = 1; loss = 0; challenged = $true }
+        [pscustomobject]@{ label = 'Partial'; state = 'challenge'; challengeAvgMs = 12.5; avg = $null; p95 = $null; jitter = $null; loss = $null }
+        [pscustomobject]@{ label = 'Closed'; state = 'closed'; pathMs = 25; avg = $null; p95 = $null; jitter = $null; loss = $null }
+        [pscustomobject]@{ label = 'Silent'; state = 'silent'; avg = $null; p95 = $null; jitter = $null; loss = $null }
+    )
+    $summaryUdp = [pscustomobject]@{
+        targets = 4; answered = 1; challenge = 1; closed = 1; silent = 1
+        serviceMs = 40; challengeMs = 12.5; loss = 0; pathMs = 25
+    }
+    $p = [pscustomobject]@{
+        results = @([pscustomobject]@{ label = 'Game TCP'; avg = 30; p95 = 35; jitter = 2; loss = 0 })
+        udp = $udp
+        summary = [pscustomobject]@{
+            gameAvgMs = 30; gameJitter = 2; gameLoss = 0; reachable = 1; endpoints = 1
+            transport = $null; udp = $summaryUdp
+        }
+    }
+    Update-Probe $p
+    $rows = @($lvProbe.Items | ForEach-Object {
+        [pscustomobject]@{
+            text = [string]$_.Text
+            cells = @($_.SubItems | Select-Object -Skip 1 | ForEach-Object { [string]$_.Text })
+        }
+    })
+    return [ordered]@{
+        rows = $rows
+        summary = [string]$lblProbeSummary.Text
+    }
+}
+

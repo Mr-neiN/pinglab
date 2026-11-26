@@ -325,6 +325,12 @@ function renderProbe() {
             u.loss,
           )}% loss${step}`;
         }
+        // The service answered the challenge but never the query that followed: the challenge
+        // RTT is a diagnostic, not a completed game-server query.
+        if (u.state === "challenge") {
+          const ms = u.challengeAvgMs === null ? "" : ` in ${num(u.challengeAvgMs)} ms`;
+          return `${esc(u.label)}: challenge answered${ms}, follow-up never completed (not a reply)`;
+        }
         if (u.state === "closed") {
           return `${esc(u.label)}: port closed${u.pathMs === null ? "" : ` (path ${num(u.pathMs)} ms)`}`;
         }
