@@ -58,13 +58,18 @@ function stateFor(id, tw) {
     case "nagle": {
       const off = tw.nagleDisabled === true;
       const unavailable = tw.nagleAvailable === false;
+      const ack = tw.nagleValues?.tcpAckFrequency;
+      const nd = tw.nagleValues?.tcpNoDelay;
+      const partial = !off && (ack === 1 || nd === 1);
       return {
         on: off,
         note: unavailable
           ? `<span class="dim">this adapter has no TCP/IP interface key to configure</span>`
           : off
             ? `<span class="ok">disabled — verified: TcpAckFrequency=${esc(tw.nagleValues?.tcpAckFrequency)}, TCPNoDelay=${esc(tw.nagleValues?.tcpNoDelay)}</span>`
-            : `<span class="warn">on — Windows batches small packets</span>`,
+            : partial
+              ? `<span class="warn">partly applied — verified: TcpAckFrequency=${esc(ack)}, TCPNoDelay=${esc(nd)}; both must be 1</span>`
+              : `<span class="warn">on — Windows batches small packets</span>`,
         actions: unavailable
           ? `<button class="btn btn-small" disabled>Not available</button>`
           : off
@@ -254,7 +259,7 @@ function renderFixes() {
   if (points && pointsBox) {
     const live = pending?.problem ? [] : pending?.items || [];
     points.innerHTML = live
-      .map((it) => `<li>${esc(it.label)} · on ${esc(it.alias)} · ${timeOf(it.at)}</li>`)
+      .map((it) => `<li>${esc(it.label)} · on ${esc(it.alias)}${it.scope ? ` (${esc(it.scope)})` : ""} · ${timeOf(it.at)}</li>`)
       .join("");
     pointsBox.classList.toggle("hidden", live.length === 0);
   }

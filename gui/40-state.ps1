@@ -78,7 +78,9 @@ function Update-RestorePoints($pending) {
         foreach ($it in @($pending.items)) {
             if ($null -eq $it) { continue }
             $row = New-Object System.Windows.Forms.ListViewItem([string]$it.label)
-            [void]$row.SubItems.Add([string]$it.alias)
+            $scopeText = [string]$it.alias
+            if ($null -ne $it.scope -and "$($it.scope)" -ne '') { $scopeText += " ($($it.scope))" }
+            [void]$row.SubItems.Add($scopeText)
             [void]$row.SubItems.Add([string]$it.restoreWillSet)
             $when = ''
             try { $when = ([datetime]$it.at).ToLocalTime().ToString('HH:mm') } catch { $when = [string]$it.at }
@@ -160,9 +162,12 @@ function Update-Overview($d) {
             Add-Row 'Wi-Fi' 'details hidden (Location services off)'
         }
         if ($null -ne $t) {
-            Add-Row 'Wireless power saving' $(if ($t.planPower -eq 'off') { 'maximum performance' } else { $t.planDetail })
+            Add-Row 'Wireless power saving (all Wi-Fi adapters)' $(if ($t.planPower -eq 'off') { 'maximum performance' } else { $t.planDetail })
             Add-Row 'NIC power management' $(if ($t.nicPower -eq 'unsupported') { 'not available on this adapter' } else { $t.nicDetail })
-            Add-Row 'Nagle' $(if ($t.nagleDisabled) { 'disabled (TcpAckFrequency=1, TCPNoDelay=1)' } else { 'on' })
+            $nagleAck = $t.nagleValues.tcpAckFrequency
+            $nagleNd = $t.nagleValues.tcpNoDelay
+            $nagleText = if ($t.nagleDisabled) { 'disabled (TcpAckFrequency=1, TCPNoDelay=1)' } elseif ($nagleAck -eq 1 -or $nagleNd -eq 1) { "partly applied (TcpAckFrequency=$nagleAck, TCPNoDelay=$nagleNd)" } else { 'on' }
+            Add-Row 'Nagle' $nagleText
         }
         Add-Row 'Active changes' $(if ($null -ne $d.pending.problem) { 'restore points unreadable - see --audit' } else { "{0}" -f $d.pending.count })
         $tuning = if ($null -eq $t.adapterTuning) { 'unreadable' } elseif ($t.adapterTuning.needsFix) { 'stock' } else { 'applied' }
@@ -228,6 +233,10 @@ function Update-Fixes($t, $pending) {
         $rowNagle.Label.Text = "Disabled - TcpAckFrequency=$($t.nagleValues.tcpAckFrequency), TCPNoDelay=$($t.nagleValues.tcpNoDelay)"
         $rowNagle.Label.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 60)
         $rowNagle.Button.Text = 'Restore'
+    } elseif ($t.nagleValues.tcpAckFrequency -eq 1 -or $t.nagleValues.tcpNoDelay -eq 1) {
+        $rowNagle.Label.Text = "Partly applied - TcpAckFrequency=$($t.nagleValues.tcpAckFrequency), TCPNoDelay=$($t.nagleValues.tcpNoDelay); both must be 1"
+        $rowNagle.Label.ForeColor = [System.Drawing.Color]::FromArgb(165, 105, 0)
+        $rowNagle.Button.Text = 'Disable'
     } else {
         $rowNagle.Label.Text = 'On - Windows batches small packets'
         $rowNagle.Label.ForeColor = [System.Drawing.Color]::FromArgb(165, 105, 0)

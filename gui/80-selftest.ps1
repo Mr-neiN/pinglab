@@ -65,7 +65,7 @@ function Invoke-GuiAdapterSelfTest {
     $restoreRow = @($lvRestore.Items | Where-Object { $_.Text -like 'Wireless*' } | Select-Object -First 1)
     $restoreAlias = if ($restoreRow.Count -eq 1) { [string]$restoreRow[0].SubItems[1].Text } else { '' }
     $planOff = ($null -ne $script:lastTweak) -and ([string]$script:lastTweak.planPower -eq 'off')
-    Note 'apply-chosen-adapter' ($landed -and ($restoreAlias -eq 'Ethernet 2') -and $planOff) ("restore=$restoreAlias plan=$($script:lastTweak.planPower) status=$($lblStatus.Text)")
+    Note 'apply-chosen-adapter' ($landed -and ($restoreAlias -like 'Ethernet 2*') -and $planOff) ("restore=$restoreAlias plan=$($script:lastTweak.planPower) status=$($lblStatus.Text)")
     Note 'rows-named' ([string]$rowPlan.Hint.Text -match 'Ethernet 2') ([string]$rowPlan.Hint.Text)
 
     # A name the machine does not have is refused and changes nothing.

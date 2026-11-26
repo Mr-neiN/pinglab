@@ -140,12 +140,14 @@ function renderConnection() {
             : '<span class="dim">unknown</span>',
     ],
     [
-      "Nagle batching",
+      "TCP buffering / ACK timing",
       state.tweak?.nagleDisabled
-        ? '<span class="ok">disabled</span>'
+        ? '<span class="ok">both off (TCPNoDelay=1, TcpAckFrequency=1)</span>'
         : state.tweak?.nagleAvailable === false
           ? '<span class="dim">not configurable</span>'
-          : '<span class="warn">on</span>',
+          : state.tweak?.nagleValues?.tcpAckFrequency === 1 || state.tweak?.nagleValues?.tcpNoDelay === 1
+            ? '<span class="warn">partly applied — both values must be 1</span>'
+            : '<span class="warn">on</span>',
     ],
   ];
   if (w?.connected) {

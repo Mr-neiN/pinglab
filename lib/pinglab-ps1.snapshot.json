@@ -1,7 +1,7 @@
 {
   "note": "SHA-256 (LF line endings) of the concatenated gui/*.ps1 modules (entry-point order) plus the entry point's tail, with `$root = $PSScriptRoot` moved to the loader. lib/ps1-split.test.mjs reassembles the same text and compares. Regenerate with `node lib/ps1-split.test.mjs --update` after an intentional GUI change.",
-  "sha256": "4cb74a5bdd59f062e3412f5134489c7f707df7f2112e48eabbc1318c8b150016",
-  "bytes": 80369,
+  "sha256": "e662c1515b66de5391175340af79fd34c16c4086f251c9b87e8b99c793545ae6",
+  "bytes": 81176,
   "files": [
     {
       "path": "gui/00-start.ps1",
@@ -29,7 +29,7 @@
     },
     {
       "path": "gui/40-state.ps1",
-      "lines": 326
+      "lines": 335
     },
     {
       "path": "gui/41-diagnostics.ps1",

@@ -105,7 +105,7 @@ function New-FixRow([int]$row, [string]$title, [string]$hint, [string]$altText =
 
 $rowPlan = New-FixRow 0 'Wireless power saving' 'Power Options -> Wireless Adapter Settings -> Power Saving Mode'
 $rowNic = New-FixRow 1 'NIC power management' 'Device Manager -> adapter -> Power Management'
-$rowNagle = New-FixRow 2 "Nagle's algorithm" 'TcpAckFrequency / TCPNoDelay on this interface'
+$rowNagle = New-FixRow 2 "TCP buffering / ACK timing" 'TCPNoDelay (Nagle) and TcpAckFrequency (delayed ACK), TCP only'
 $rowWifi = New-FixRow 3 'Wi-Fi radio power save (desktop)' 'MIMO power save + roaming aggressiveness, from the driver itself.'
 $rowOrder = New-FixRow 4 'Wi-Fi auto-connect order' 'netsh wlan show profiles order - the network Windows rejoins after an adapter reset.'
 $rowDns = New-FixRow 5 'DNS servers' 'Benchmark the resolvers PingLab knows, or hand the adapter back to your router.' 'Automatic'
