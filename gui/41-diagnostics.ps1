@@ -76,6 +76,7 @@ function Update-Probe($p) {
                 $title += '; follow-up never completed - not a reply)'
             }
             elseif ($u.state -eq 'unexpected') { $title += ' (replied with something else, untimed)' }
+            elseif ($u.state -eq 'mismatched') { $title += ' (datagrams from a different address/port, untimed)' }
             else { $title += ' (no reply)' }
         }
         $it = New-Object System.Windows.Forms.ListViewItem($title)
@@ -104,6 +105,7 @@ function Update-Probe($p) {
         elseif ($_.state -eq 'challenge') { 'UDP {0}: challenge answered in {1} ms, follow-up never completed (not a reply)' -f $_.label, (N $_.challengeAvgMs) }
         elseif ($_.state -eq 'closed') { 'UDP {0}: port closed, path {1} ms (not service latency)' -f $_.label, (N $_.pathMs) }
         elseif ($_.state -eq 'unexpected') { 'UDP {0}: replied with something else, untimed (not loss)' -f $_.label }
+        elseif ($_.state -eq 'mismatched') { 'UDP {0}: datagrams came from a different address/port, untimed (not loss)' -f $_.label }
         else { 'UDP {0}: no reply (not loss)' -f $_.label }
     })
     $rowsText = @(@($p.results | ForEach-Object { '{0}: avg {1} p95 {2} jitter {3} loss {4}%' -f $_.label, (N $_.avg), (N $_.p95), (N $_.jitter), (N $_.loss) }) + $udpRows) -join ' || '
@@ -118,6 +120,8 @@ function Update-Probe($p) {
         elseif ($uSum.challenge -gt 0) { $udpNote = ' | UDP no completed reply ({0}/{1} challenge only)' -f $uSum.challenge, $uSum.targets }
         elseif ($uSum.closed -gt 0) { $udpNote = ' | UDP no service reply ({0}/{1} port closed)' -f $uSum.closed, $uSum.targets }
         else { $udpNote = ' | UDP unanswered, not loss' }
+        if ($uSum.mismatched -gt 0) { $udpNote += ' | {0} wrong source, untimed' -f $uSum.mismatched }
+        if ($uSum.unexpected -gt 0) { $udpNote += ' | {0} wrong reply, untimed' -f $uSum.unexpected }
     }
     $lblProbeSummary.Text = (("game avg {0} ms | jitter {1} ms | loss {2}% | {3}/{4} reachable" -f (N $p.summary.gameAvgMs), (N $p.summary.gameJitter), (N $p.summary.gameLoss), $p.summary.reachable, $p.summary.endpoints) + $udpNote)
     if ($null -ne $p.summary.transport) {
@@ -133,6 +137,8 @@ function Update-Probe($p) {
         elseif ($u.challenge -gt 0) { Log ("UDP no completed reply; {0}/{1} challenge only, {2} ms challenge RTT" -f $u.challenge, $u.targets, (N $u.challengeMs)) }
         elseif ($u.closed -gt 0) { Log ("UDP no service reply; {0}/{1} port(s) closed, path {2} ms" -f $u.closed, $u.targets, (N $u.pathMs)) }
         else { Log ("UDP unanswered on {0} endpoint(s); not counted as packet loss" -f $u.targets) }
+        if ($u.mismatched -gt 0) { Log ("UDP {0} endpoint(s) sent datagrams from a different address/port; untimed" -f $u.mismatched) }
+        if ($u.unexpected -gt 0) { Log ("UDP {0} endpoint(s) sent a datagram that did not match the query; untimed" -f $u.unexpected) }
     }
 }
 

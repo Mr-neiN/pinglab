@@ -336,9 +336,12 @@ function renderProbe() {
         if (u.state === "closed") {
           return `${esc(u.label)}: port closed${u.pathMs === null ? "" : ` (path ${num(u.pathMs)} ms)`}`;
         }
-        // Something came back, but not this probe's answer, so there is no round-trip to time.
+        // Traffic that came from another source or did not match this query is not a round trip.
+        if (u.state === "mismatched") {
+          return `${esc(u.label)}: datagrams from a different address/port, not this probe's target (untimed)`;
+        }
         if (u.state === "unexpected") {
-          return `${esc(u.label)}: replied with something else (not this probe; untimed)`;
+          return `${esc(u.label)}: reply did not match this probe's query (untimed)`;
         }
         return `${esc(u.label)}: no UDP reply (a service ignores unknown packets; not loss)`;
       })

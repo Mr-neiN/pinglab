@@ -129,9 +129,11 @@ function Invoke-GuiProbeSelfTest {
         [pscustomobject]@{ label = 'Partial'; state = 'challenge'; challengeAvgMs = 12.5; avg = $null; p95 = $null; jitter = $null; loss = $null }
         [pscustomobject]@{ label = 'Closed'; state = 'closed'; pathMs = 25; avg = $null; p95 = $null; jitter = $null; loss = $null }
         [pscustomobject]@{ label = 'Silent'; state = 'silent'; avg = $null; p95 = $null; jitter = $null; loss = $null }
+        [pscustomobject]@{ label = 'Mismatched'; state = 'mismatched'; avg = $null; p95 = $null; jitter = $null; loss = $null }
+        [pscustomobject]@{ label = 'Unexpected'; state = 'unexpected'; avg = $null; p95 = $null; jitter = $null; loss = $null }
     )
     $summaryUdp = [pscustomobject]@{
-        targets = 4; answered = 1; challenge = 1; closed = 1; silent = 1
+        targets = 6; answered = 1; challenge = 1; closed = 1; silent = 1; mismatched = 1; unexpected = 1
         serviceMs = 40; challengeMs = 12.5; loss = 0; pathMs = 25
     }
     $p = [pscustomobject]@{
